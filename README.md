@@ -11,9 +11,10 @@ Local, unpublished core under incremental migration. Reviewed groups:
 | G5 | Isolated REALITY/exporter runtime tests and synthetic shared fixture |
 | G6 | `nixosModules.xray-declarative`, `xray-monitoring`, optional `xray-sops`, partial `vps-xray` profile and optional VM acceptance |
 | G7 | `nixosModules.vps-base`: parameterized VPS baseline with caller-owned access and credential sources |
+| G8 | HM secret provider and GNOME/KDE/standalone/integrated WSL capability profiles |
 
-P3 is not complete. WSL/desktop profiles, fleet CLI, deployment export and a VPS
-host/installer are not implemented. Private integration is managed separately by
+P3 is not complete. Application implementations, the NixOS-WSL system adapter,
+fleet CLI, deployment export and a VPS host/installer still require migration. Private integration is managed separately by
 caller-owned adapters and a pinned core input.
 No history from the private repository was copied; no publication is authorised.
 
@@ -146,6 +147,53 @@ Executing it explicitly contacts the WARP peer and Cloudflare trace endpoint;
 core checks use mocks only and never invoke a real WARP probe. Existing personal
 command aliases remain the private caller's responsibility.
 
+## Home Manager profiles and secrets
+
+`homeManagerModules` exports `platform`, `desktop`, `secrets` (`secrets-file` is
+an alias), `desktop-common`, `gnome`, `kde`, `wsl-common`, `wsl-standalone` and
+`wsl-integrated`. Profiles compose capability settings, not personal machines.
+The caller must supply application modules implementing Agents, GUI/MAX, Mihomo,
+RDP and browser options. KDE additionally needs the caller's pinned Plasma module;
+standalone WSL needs its switching-helper module and `nixpkgsInput` special argument.
+Identity, `stateVersion`, package sets, hardware, sound resources, credentials,
+SSH/RDP destinations and policy resources belong to the caller. Profiles do not
+pull private application implementations into core or claim they are public.
+
+Import the caller's pinned SOPS HM module alongside `secrets`. Configure either
+`secrets.file` for one device (null means secret-free), or explicit `secrets.files`,
+`layout` and `defaultGroup` for a legacy layout. `hasSecret` and `secretFile` remain
+module arguments; detection reads only flat top-level key names, never decrypts.
+`allowedKeys` selects consumers, not decryption authority. No licence or backup
+secret is declared implicitly. The caller may override `sops.age.keyFile`.
+
+The optional `secrets.editor.enable` installs `edit-secrets`; `editor.fileNames`
+selects mutable checkout files instead of store copies. `requestedKeys` and SOPS
+declarations determine missing-key seeds; existing values are never replaced.
+Nested declaration keys are supported by the editor, not by flat-key detection.
+No file, recipients or identity is created or migrated automatically.
+Integrated WSL rejects enabled containers without a device source, imports no
+standalone helper and disables the legacy LAN listener. Its caller supplies
+`wslProfile.hostName`. Standalone WSL can explicitly disable containers for a
+secret-free bootstrap; enabling application credentials is caller policy.
+
+There are no additional core inputs. Optional real HM/SOPS/Plasma contracts use
+caller-owned pins and synthetic capability stubs:
+
+```nix
+core.lib.mkHomeManagerChecks {
+  nixpkgs = inputs.nixpkgs;
+  homeManager = inputs.home-manager;
+  sopsModule = inputs.sops-nix.homeManagerModules.sops;
+  plasmaModule = inputs.plasma-manager.homeModules.plasma-manager;
+}
+```
+
+The returned `result` evaluates eleven contract groups and generation derivations;
+`check` is a derivation recording successful evaluation. `editor` supplies the
+synthetic editor used by `tests/test-secret-editor.py SCRIPT`. These are not full
+application builds or real decryption tests. Default `home-profile-dependencies`
+and the expanded boundary allowlist guard core imports and resources.
+
 ## Packages and pure helper
 
 The stable input is pinned for checks and exported packages. Consumers may use
@@ -169,8 +217,9 @@ implied. The standalone package enables no service and upstream listens on
 nix flake check --offline --no-write-lock-file --option substitute false path:.
 ```
 
-All 15 default checks pass offline after separate preparation of pinned cache
-outputs without changing inputs or hashes. These include boundary/dependency
+The original 15 default checks passed offline after separate preparation of
+pinned cache outputs without changing inputs or hashes. G8 adds a sixteenth
+`home-profile-dependencies` check; application builds are not implied. These include boundary/dependency
 guards, module evaluation, mocked probe lifecycle, packaged renderer/exporter,
 promtool scenarios and a real loopback REALITY test. G5 actually tested tunnel
 traffic, metrics, non-resetting counters, exporter availability with Xray stopped

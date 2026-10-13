@@ -46,6 +46,21 @@ ALLOWLIST = {
     "tests/xray-modules.nix",
     "tests/test-xray-module-dependencies.py",
     "tests/test-xray-warp-probe.py",
+    "modules/home-manager/platform.nix",
+    "modules/home-manager/desktop.nix",
+    "modules/home-manager/secrets.nix",
+    "profiles/home-manager/desktop-common.nix",
+    "profiles/home-manager/gnome.nix",
+    "profiles/home-manager/kde.nix",
+    "profiles/home-manager/wsl-common.nix",
+    "profiles/home-manager/wsl-standalone.nix",
+    "profiles/home-manager/wsl-integrated.nix",
+    "tests/home-manager.nix",
+    "tests/home-capabilities-stub.nix",
+    "tests/test-home-dependencies.py",
+    "tests/test-secret-editor.py",
+    "tests/fixtures/device.yaml",
+    "tests/fixtures/other.yaml",
 }
 
 

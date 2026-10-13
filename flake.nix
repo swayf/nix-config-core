@@ -89,6 +89,22 @@
         inherit pkgs;
         modules = self.nixosModules;
       };
+      # Caller supplies its existing pins; the core adds no HM/SOPS/desktop inputs.
+      lib.mkHomeManagerChecks = args: import ./tests/home-manager.nix (args // {
+        modules = self.homeManagerModules;
+      });
+      homeManagerModules = {
+        platform = ./modules/home-manager/platform.nix;
+        desktop = ./modules/home-manager/desktop.nix;
+        secrets = ./modules/home-manager/secrets.nix;
+        secrets-file = ./modules/home-manager/secrets.nix;
+        desktop-common = ./profiles/home-manager/desktop-common.nix;
+        gnome = ./profiles/home-manager/gnome.nix;
+        kde = ./profiles/home-manager/kde.nix;
+        wsl-common = ./profiles/home-manager/wsl-common.nix;
+        wsl-standalone = ./profiles/home-manager/wsl-standalone.nix;
+        wsl-integrated = ./profiles/home-manager/wsl-integrated.nix;
+      };
       nixosModules = {
         vps-hardening = ./modules/nixos/vps-hardening.nix;
         xray-declarative = ./modules/nixos/xray-declarative.nix;
@@ -103,6 +119,12 @@
       };
 
       checks.${system} = {
+        home-profile-dependencies = pkgs.runCommand "home-profile-dependency-guards" {
+          nativeBuildInputs = [ pkgs.python3 ];
+        } ''
+          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-home-dependencies.py
+          touch $out
+        '';
         vps-base = import ./tests/vps-base.nix {
           nixpkgs = nixpkgs2605;
           modules = self.nixosModules;
