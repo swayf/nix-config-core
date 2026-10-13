@@ -1,0 +1,108 @@
+{
+  "evaluation_interval": "30s",
+  "tests": [
+    {
+      "name": "M1 scrape failure then recovery",
+      "interval": "30s",
+      "input_series": [{"series": "up{job=\"xray\",node=\"test-vps\"}", "values": "0 0 0 0 0 1 1"}],
+      "alert_rule_test": [
+        {"eval_time": "1m30s", "alertname": "ExporterUnavailable", "exp_alerts": []},
+        {"eval_time": "2m", "alertname": "ExporterUnavailable", "exp_alerts": [
+          {"exp_labels": {"job": "node", "node": "test-vps", "severity": "warning"}, "exp_annotations": {"summary": "Expected local exporter unavailable or missing"}},
+          {"exp_labels": {"job": "blackbox", "node": "test-vps", "severity": "warning"}, "exp_annotations": {"summary": "Expected local exporter unavailable or missing"}},
+          {"exp_labels": {"job": "xray", "node": "test-vps", "severity": "warning"}, "exp_annotations": {"summary": "Expected local exporter unavailable or missing"}}
+        ]},
+        {"eval_time": "3m", "alertname": "ExporterUnavailable", "exp_alerts": [
+          {"exp_labels": {"job": "node", "node": "test-vps", "severity": "warning"}, "exp_annotations": {"summary": "Expected local exporter unavailable or missing"}},
+          {"exp_labels": {"job": "blackbox", "node": "test-vps", "severity": "warning"}, "exp_annotations": {"summary": "Expected local exporter unavailable or missing"}}
+        ]}
+      ]
+    },
+    {
+      "name": "M2 HTTP is up but Xray stats fail then recover",
+      "interval": "30s",
+      "input_series": [
+        {"series": "up{job=\"xray\",node=\"test-vps\"}", "values": "1+0x6"},
+        {"series": "xray_up{job=\"xray\",node=\"test-vps\"}", "values": "0 0 0 0 0 1 1"}
+      ],
+      "alert_rule_test": [
+        {"eval_time": "1m30s", "alertname": "XrayStatsUnavailable", "exp_alerts": []},
+        {"eval_time": "2m", "alertname": "XrayStatsUnavailable", "exp_alerts": [{"exp_labels": {"job": "xray", "node": "test-vps", "severity": "warning"}, "exp_annotations": {"summary": "Xray StatsService unavailable or missing (not exporter HTTP health)"}}]},
+        {"eval_time": "3m", "alertname": "XrayStatsUnavailable", "exp_alerts": []}
+      ]
+    },
+    {
+      "name": "missing expected targets and metrics also fire",
+      "interval": "30s",
+      "alert_rule_test": [
+        {"eval_time": "2m", "alertname": "ExporterUnavailable", "exp_alerts": [
+          {"exp_labels": {"job": "node", "node": "test-vps", "severity": "warning"}, "exp_annotations": {"summary": "Expected local exporter unavailable or missing"}},
+          {"exp_labels": {"job": "blackbox", "node": "test-vps", "severity": "warning"}, "exp_annotations": {"summary": "Expected local exporter unavailable or missing"}},
+          {"exp_labels": {"job": "xray", "node": "test-vps", "severity": "warning"}, "exp_annotations": {"summary": "Expected local exporter unavailable or missing"}}
+        ]},
+        {"eval_time": "2m", "alertname": "XrayStatsUnavailable", "exp_alerts": [{"exp_labels": {"job": "xray", "node": "test-vps", "severity": "warning"}, "exp_annotations": {"summary": "Xray StatsService unavailable or missing (not exporter HTTP health)"}}]},
+        {"eval_time": "2m", "alertname": "XrayUnitNotActive", "exp_alerts": [{"exp_labels": {"node": "test-vps", "name": "xray.service", "state": "active", "severity": "warning"}, "exp_annotations": {"summary": "Xray systemd unit not active or missing"}}]},
+        {"eval_time": "2m", "alertname": "MonitoringHealthFailed", "exp_alerts": [
+          {"exp_labels": {"job": "monitoring-health", "node": "test-vps", "service": "prometheus", "severity": "warning"}, "exp_annotations": {"summary": "Local monitoring health check failed or missing"}},
+          {"exp_labels": {"job": "monitoring-health", "node": "test-vps", "service": "grafana", "severity": "warning"}, "exp_annotations": {"summary": "Local monitoring health check failed or missing"}},
+          {"exp_labels": {"job": "monitoring-health", "node": "test-vps", "service": "alertmanager", "severity": "warning"}, "exp_annotations": {"summary": "Local monitoring health check failed or missing"}}
+        ]}
+      ]
+    },
+    {
+      "name": "M3 memory threshold delay and recovery",
+      "interval": "30s",
+      "input_series": [
+        {"series": "node_memory_MemAvailable_bytes{node=\"test-vps\"}", "values": "10+0x20 20 20"},
+        {"series": "node_memory_MemTotal_bytes{node=\"test-vps\"}", "values": "100+0x22"}
+      ],
+      "alert_rule_test": [
+        {"eval_time": "9m30s", "alertname": "MemoryLow", "exp_alerts": []},
+        {"eval_time": "10m", "alertname": "MemoryLow", "exp_alerts": [{"exp_labels": {"node": "test-vps", "severity": "warning"}, "exp_annotations": {"summary": "Available RAM below 15%"}}]},
+        {"eval_time": "11m", "alertname": "MemoryLow", "exp_alerts": []}
+      ]
+    },
+    {
+      "name": "M3 root disk and inode thresholds",
+      "interval": "30s",
+      "input_series": [
+        {"series": "node_filesystem_avail_bytes{node=\"test-vps\",mountpoint=\"/\",fstype=\"ext4\"}", "values": "4+0x21"},
+        {"series": "node_filesystem_size_bytes{node=\"test-vps\",mountpoint=\"/\",fstype=\"ext4\"}", "values": "100+0x21"},
+        {"series": "node_filesystem_files_free{node=\"test-vps\",mountpoint=\"/\",fstype=\"ext4\"}", "values": "10+0x21"},
+        {"series": "node_filesystem_files{node=\"test-vps\",mountpoint=\"/\",fstype=\"ext4\"}", "values": "100+0x21"}
+      ],
+      "alert_rule_test": [
+        {"eval_time": "1m30s", "alertname": "RootDiskCritical", "exp_alerts": []},
+        {"eval_time": "2m", "alertname": "RootDiskCritical", "exp_alerts": [{"exp_labels": {"node": "test-vps", "mountpoint": "/", "fstype": "ext4", "severity": "critical"}, "exp_annotations": {"summary": "Available root filesystem space below 5%"}}]},
+        {"eval_time": "10m", "alertname": "RootDiskLow", "exp_alerts": [{"exp_labels": {"node": "test-vps", "mountpoint": "/", "fstype": "ext4", "severity": "warning"}, "exp_annotations": {"summary": "Available root filesystem space below 15%"}}]},
+        {"eval_time": "10m", "alertname": "RootInodesLow", "exp_alerts": [{"exp_labels": {"node": "test-vps", "mountpoint": "/", "fstype": "ext4", "severity": "warning"}, "exp_annotations": {"summary": "Free root filesystem inodes below 15%"}}]}
+      ]
+    },
+    {
+      "name": "M3 sustained CPU and swap pressure",
+      "interval": "30s",
+      "input_series": [
+        {"series": "node_cpu_seconds_total{node=\"test-vps\",cpu=\"0\",mode=\"idle\"}", "values": "0+1x34"},
+        {"series": "node_memory_SwapFree_bytes{node=\"test-vps\"}", "values": "10+0x34"},
+        {"series": "node_memory_SwapTotal_bytes{node=\"test-vps\"}", "values": "100+0x34"}
+      ],
+      "alert_rule_test": [
+        {"eval_time": "15m", "alertname": "CpuHigh", "exp_alerts": []},
+        {"eval_time": "16m", "alertname": "CpuHigh", "exp_alerts": [{"exp_labels": {"node": "test-vps", "severity": "warning"}, "exp_annotations": {"summary": "CPU usage above 90%"}}]},
+        {"eval_time": "10m", "alertname": "SwapHigh", "exp_alerts": [{"exp_labels": {"node": "test-vps", "severity": "warning"}, "exp_annotations": {"summary": "Swap usage above 80%"}}]}
+      ]
+    },
+    {
+      "name": "M4 inactive unit and repeated uptime resets",
+      "interval": "30s",
+      "input_series": [
+        {"series": "node_systemd_unit_state{node=\"test-vps\",name=\"xray.service\",state=\"active\"}", "values": "0+0x8"},
+        {"series": "xray_uptime_seconds{node=\"test-vps\"}", "values": "100 130 1 31 1 31 1 31 61"}
+      ],
+      "alert_rule_test": [
+        {"eval_time": "2m", "alertname": "XrayUnitNotActive", "exp_alerts": [{"exp_labels": {"node": "test-vps", "name": "xray.service", "state": "active", "severity": "warning"}, "exp_annotations": {"summary": "Xray systemd unit not active or missing"}}]},
+        {"eval_time": "3m", "alertname": "XrayFrequentRestarts", "exp_alerts": [{"exp_labels": {"node": "test-vps", "severity": "warning"}, "exp_annotations": {"summary": "At least three observed Xray restarts in 15 minutes (initial threshold)"}}]}
+      ]
+    }
+  ]
+}
