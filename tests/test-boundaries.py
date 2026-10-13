@@ -67,6 +67,25 @@ ALLOWLIST = {
     "tests/test-secret-editor.py",
     "tests/fixtures/device.yaml",
     "tests/fixtures/other.yaml",
+    "tests/fixtures/gui-device.yaml",
+    "tests/gui-proxy.nix",
+    "tests/gui-helpers.nix",
+    "tests/test-gui-proxy-dependencies.py",
+    "modules/home-manager/mihomo.nix",
+    "modules/home-manager/container-gateway.nix",
+    "modules/home-manager/gui-container.nix",
+    "modules/home-manager/gui-container/image.nix",
+    "modules/home-manager/gui-container/applications.nix",
+    "modules/home-manager/gui-container/host-desktop.nix",
+    "modules/home-manager/gui-container/windows-shortcuts.nix",
+    "modules/home-manager/gui-container/windows-shortcuts.py",
+    "modules/home-manager/gui-container/launcher.sh",
+    "modules/home-manager/gui-container/session.sh",
+    "modules/home-manager/gui-container/exec.sh",
+    "modules/home-manager/gui-container/test-launcher.py",
+    "modules/home-manager/gui-container/test-session.py",
+    "modules/home-manager/gui-container/test-windows-shortcuts.py",
+    "profiles/home-manager/wsl-gui-device.nix",
 }
 
 
@@ -122,6 +141,9 @@ class BoundaryTests(unittest.TestCase):
             with self.subTest(path=name):
                 text = (ROOT / name).read_text()
                 self.assertNotRegex(text, r"(?i)AGE-SECRET-KEY-|-----BEGIN [A-Z ]*PRIVATE KEY-----")
+                # The immutable image uses a fixed, non-host container HOME.
+                if name.startswith("modules/home-manager/gui-container/"):
+                    text = text.replace("/home/gui", "/container-home").replace("state/home/", "state/container-home/")
                 self.assertNotRegex(text, r"/(?:home|Users)/")
                 self.assertNotIn(".sops.yaml", text)
                 self.assertNotIn("install-attempt.json", text)

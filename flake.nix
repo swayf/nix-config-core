@@ -96,10 +96,17 @@
       lib.mkApplicationChecks = args: import ./tests/applications.nix (args // {
         modules = self.homeManagerModules;
       });
+      lib.mkGuiProxyChecks = args: import ./tests/gui-proxy.nix (args // {
+        modules = self.homeManagerModules;
+      });
       lib.mkWslChecks = args: import ./tests/wsl.nix (args // {
         module = self.nixosModules.wsl;
       });
       homeManagerModules = {
+        mihomo = ./modules/home-manager/mihomo.nix;
+        gui-container = ./modules/home-manager/gui-container.nix;
+        gui-windows-shortcuts = ./modules/home-manager/gui-container/windows-shortcuts.nix;
+        wsl-gui-device = ./profiles/home-manager/wsl-gui-device.nix;
         cli = ./modules/home-manager/cli.nix;
         playwright = ./modules/home-manager/playwright.nix;
         platform = ./modules/home-manager/platform.nix;
@@ -128,6 +135,13 @@
       };
 
       checks.${system} = {
+        gui-proxy-dependencies = pkgs.runCommand "gui-proxy-dependency-guards" {
+          nativeBuildInputs = [ pkgs.python3 ];
+        } ''
+          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-gui-proxy-dependencies.py
+          touch $out
+        '';
+        gui-helpers = import ./tests/gui-helpers.nix { inherit pkgs; };
         wsl-dependencies = pkgs.runCommand "wsl-dependency-guards" {
           nativeBuildInputs = [ pkgs.python3 ];
         } ''

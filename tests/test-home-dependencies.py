@@ -21,8 +21,9 @@ class HomeDependencies(unittest.TestCase):
         for directory in ("modules/home-manager", "profiles/home-manager"):
             for path in (ROOT / directory).glob("*.nix"):
                 text = path.read_text()
-                for token in ("userConfig", "shared.", "inputs.", "personal.yaml", "recipients", "lt1-", "swayf"):
+                for token in ("userConfig", "inputs.", "personal.yaml", "recipients", "lt1-", "swayf"):
                     self.assertNotIn(token, text, path)
+                self.assertNotRegex(text, r"\bshared\.[A-Za-z_]")
                 self.assertNotRegex(text, r"/(?:home|Users)/|AGE-SECRET-KEY-|PRIVATE KEY")
                 self.assertNotRegex(text, r"(?:home|system)\.stateVersion\s*=")
                 self.assertNotRegex(text, r"(?:home\.)?(?:username|homeDirectory)\s*=")

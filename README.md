@@ -1,6 +1,6 @@
 # nix-config-core
 
-Local, unpublished core under incremental migration. Reviewed groups:
+Reusable core under incremental migration. Reviewed groups:
 
 | Group | Exports / scope |
 |---|---|
@@ -13,11 +13,13 @@ Local, unpublished core under incremental migration. Reviewed groups:
 | G7 | `nixosModules.vps-base`: parameterized VPS baseline with caller-owned access and credential sources |
 | G8 | HM secret provider and GNOME/KDE/standalone/integrated WSL capability profiles |
 | G9 | Caller-pinned CLI tools and Playwright HM modules; NixOS-WSL system mechanism |
+| G10 | Mihomo, GUI container/resources, explicit Windows shortcuts and bounded WSL GUI/device profile |
 
 P3 is not complete. Remaining application implementations, fleet CLI,
 deployment export and a VPS host/installer still require migration. Private integration is managed separately by
 caller-owned adapters and a pinned core input.
-No history from the private repository was copied; no publication is authorised.
+No history from the private repository was copied. Only separately reviewed code
+and synthetic tests belong here; ciphertext and device identities remain caller-owned.
 
 ## Runtime module API
 
@@ -220,6 +222,40 @@ sudo operations. This is not a deployment exporter or a Windows installer.
 They expose `result` and `check`. WSL also exposes `helper` and a synthetic `system`
 for optional builds with a minimal home stub, not the full application profile.
 
+### GUI/proxy applications
+
+`homeManagerModules.mihomo`, `gui-container` and `gui-windows-shortcuts` export
+mechanisms with their reviewed local resources. Supply `platform`, `secrets` and
+the caller's SOPS HM module alongside them. Mihomo consumes the transitional
+`hasSecret`/`secretFile` arguments; `services.mihomo.ruleSeed` must explicitly
+reference a pinned directory with `domains_all.lst` and `ipsum.lst` when providers
+are enabled. There is no implicit rule-list input or personal subscription.
+The subscription decoder retains legacy behaviour, including the public INCY
+protocol constant and its unauthenticated CTR decoding; review emitted URLs.
+
+GUI retains the dedicated HOME/shared mounts, private D-Bus/session, rootless
+Podman/crun, host Wayland socket and fail-closed gateway. Its gateway has no
+DIRECT fallback. `gui-windows-shortcuts` installs an explicitly invoked generator;
+it never creates Windows shortcuts during activation. Personal browser profiles
+and extra application packages remain caller options.
+
+`homeManagerModules.wsl-gui-device` is a separate bounded integrated profile,
+not the existing full WSL profile. Pass the caller's `sopsModule` and
+`mihomoRuleSeed` through HM extra arguments, supply username/HOME/stateVersion,
+and set `wslProfile.containers.enable` plus `secrets.file`. It enables only GUI/US
+proxy and CLI/Playwright, with no Agents, Pi, remote SSH listener or standalone
+switching helper. Its sole credential consumer is `mhnodes`; consumer selection
+is not decryption isolation. Validate recipients/file contents at the private
+export boundary. Missing device sources fail assertions; no identity is copied,
+created or decrypted at evaluation/build time.
+
+`lib.mkGuiProxyChecks { nixpkgs; homeManager; sopsModule; ruleSeed; }` uses caller
+pins and synthetic non-decryptable data. It exposes `result`, `check`, `activation`,
+`image` and `gateway`; these are opt-in, not default full-application builds.
+Default `gui-helpers` checks real private D-Bus/session with a mocked Wayland
+handshake and launcher/Windows-generator mocks. Host-TUN-dependent launcher
+cases may skip in the Nix sandbox; these checks do not prove WSLg/Podman egress.
+
 ## Packages and pure helper
 
 The stable input is pinned for checks and exported packages. Consumers may use
@@ -245,7 +281,11 @@ nix flake check --offline --no-write-lock-file --option substitute false path:.
 
 The original 15 default checks passed offline after separate preparation of
 pinned cache outputs without changing inputs or hashes. G8 adds a sixteenth
-`home-profile-dependencies` check; application builds are not implied. These include boundary/dependency
+`home-profile-dependencies` check; G9 adds `wsl-dependencies`, and G10 adds
+`gui-proxy-dependencies`/`gui-helpers`. All 19 default checks passed offline with
+substitutions disabled after fetching two pinned dev outputs. The new helper
+check ran 35 launcher mocks, four private-session tests and five Windows-generator
+tests without skips. Full application builds are not implied. These include boundary/dependency
 guards, module evaluation, mocked probe lifecycle, packaged renderer/exporter,
 promtool scenarios and a real loopback REALITY test. G5 actually tested tunnel
 traffic, metrics, non-resetting counters, exporter availability with Xray stopped
