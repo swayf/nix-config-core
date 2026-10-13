@@ -93,7 +93,15 @@
       lib.mkHomeManagerChecks = args: import ./tests/home-manager.nix (args // {
         modules = self.homeManagerModules;
       });
+      lib.mkApplicationChecks = args: import ./tests/applications.nix (args // {
+        modules = self.homeManagerModules;
+      });
+      lib.mkWslChecks = args: import ./tests/wsl.nix (args // {
+        module = self.nixosModules.wsl;
+      });
       homeManagerModules = {
+        cli = ./modules/home-manager/cli.nix;
+        playwright = ./modules/home-manager/playwright.nix;
         platform = ./modules/home-manager/platform.nix;
         desktop = ./modules/home-manager/desktop.nix;
         secrets = ./modules/home-manager/secrets.nix;
@@ -106,6 +114,7 @@
         wsl-integrated = ./profiles/home-manager/wsl-integrated.nix;
       };
       nixosModules = {
+        wsl = ./modules/nixos/wsl.nix;
         vps-hardening = ./modules/nixos/vps-hardening.nix;
         xray-declarative = ./modules/nixos/xray-declarative.nix;
         xray-monitoring = ./modules/nixos/xray-monitoring.nix;
@@ -119,6 +128,12 @@
       };
 
       checks.${system} = {
+        wsl-dependencies = pkgs.runCommand "wsl-dependency-guards" {
+          nativeBuildInputs = [ pkgs.python3 ];
+        } ''
+          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-wsl-dependencies.py
+          touch $out
+        '';
         home-profile-dependencies = pkgs.runCommand "home-profile-dependency-guards" {
           nativeBuildInputs = [ pkgs.python3 ];
         } ''

@@ -12,9 +12,10 @@ Local, unpublished core under incremental migration. Reviewed groups:
 | G6 | `nixosModules.xray-declarative`, `xray-monitoring`, optional `xray-sops`, partial `vps-xray` profile and optional VM acceptance |
 | G7 | `nixosModules.vps-base`: parameterized VPS baseline with caller-owned access and credential sources |
 | G8 | HM secret provider and GNOME/KDE/standalone/integrated WSL capability profiles |
+| G9 | Caller-pinned CLI tools and Playwright HM modules; NixOS-WSL system mechanism |
 
-P3 is not complete. Application implementations, the NixOS-WSL system adapter,
-fleet CLI, deployment export and a VPS host/installer still require migration. Private integration is managed separately by
+P3 is not complete. Remaining application implementations, fleet CLI,
+deployment export and a VPS host/installer still require migration. Private integration is managed separately by
 caller-owned adapters and a pinned core input.
 No history from the private repository was copied; no publication is authorised.
 
@@ -193,6 +194,31 @@ The returned `result` evaluates eleven contract groups and generation derivation
 synthetic editor used by `tests/test-secret-editor.py SCRIPT`. These are not full
 application builds or real decryption tests. Default `home-profile-dependencies`
 and the expanded boundary allowlist guard core imports and resources.
+
+## Applications and NixOS-WSL
+
+`homeManagerModules.cli` and `playwright` use only the caller's `pkgs`; they
+neither select an identity nor set global Playwright browser paths. History,
+project environments and installed toolchains remain mutable user state.
+
+`nixosModules.wsl` requires import-time `wslModule` and `homeManagerModule` in
+NixOS `specialArgs`, from the caller's pinned NixOS-WSL and Home Manager inputs.
+Also supply `nixpkgsInput` and `wslHomeModules` (a list of caller home modules).
+Optional caller arguments use `home-manager.extraSpecialArgs`. Home modules must implement the integrated
+`wslProfile.containers.enable` and `secrets.file` interfaces. User identity, home,
+`stateVersion`, application composition, secret files and policy remain caller-owned.
+
+The mechanism retains Podman/crun, subordinate ID ranges, lingering and
+permission-only device rules. `workstation.wsl.checkoutPath` defaults to the user's
+home plus `/home-manager`; `flakeOutput` defaults to the hostname. Both are
+explicitly overridable for delivery; runtime `WSL_FLAKE` takes precedence.
+`wsl-host build` does not activate anything; `switch` and `rollback` are explicit
+sudo operations. This is not a deployment exporter or a Windows installer.
+
+`lib.mkApplicationChecks { nixpkgs; homeManager; }` and
+`lib.mkWslChecks { nixpkgs; homeManager; nixosWsl; }` accept caller-owned pins.
+They expose `result` and `check`. WSL also exposes `helper` and a synthetic `system`
+for optional builds with a minimal home stub, not the full application profile.
 
 ## Packages and pure helper
 
