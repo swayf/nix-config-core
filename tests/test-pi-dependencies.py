@@ -59,7 +59,8 @@ class PiDependencies(unittest.TestCase):
                 self.assertNotRegex(text, r"projects_kvm|soft-factory|swayf|reviewer-policy")
                 self.assertNotRegex(text, r"AGE-SECRET-KEY-|-----BEGIN [A-Z ]*PRIVATE KEY-----")
         self.assertFalse((PI / "agents").exists())
-        self.assertFalse((PI / "extensions").exists())
+        # Generic extensions have their own exact source/policy/dependency guard.
+        self.assertTrue((PI / "extensions.nix").is_file())
         self.assertFalse((PI / "skills").exists())
         self.assertFalse((PI / "web-search.json").exists())
         self.assertFalse((PI / "model-presets.json").exists())

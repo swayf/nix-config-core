@@ -87,6 +87,9 @@
       lib.mkPiPackages = import ./modules/programs/pi/packages.nix;
       # Paths only: callers choose when to run these against a writable HOME.
       lib.piInstallers = import ./modules/programs/pi/installers.nix;
+      lib.piExtensions = import ./modules/programs/pi/extensions.nix;
+      lib.mkPiWikiAsk = import ./modules/programs/pi/wiki-ask.nix;
+      lib.mkPiExtensionChecks = import ./tests/pi-extensions-native.nix;
       lib.mkPiChecks = args: import ./tests/pi-home.nix (args // {
         module = self.homeManagerModules.pi;
       });
@@ -142,6 +145,13 @@
       };
 
       checks.${system} = {
+        pi-extension-dependencies = pkgs.runCommand "pi-extension-dependency-guards" {
+          nativeBuildInputs = [ pkgs.python3 ];
+        } ''
+          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-pi-extension-dependencies.py
+          touch $out
+        '';
+        pi-extensions = import ./tests/pi-extensions.nix { inherit pkgs; };
         pi-workspace-installers = import ./tests/pi-workspace-installers.nix { inherit pkgs; };
         pi-dependencies = pkgs.runCommand "pi-dependency-guards" {
           nativeBuildInputs = [ pkgs.python3 ];

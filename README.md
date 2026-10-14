@@ -15,7 +15,8 @@ Reusable core under incremental migration. Reviewed groups:
 | G9 | Caller-pinned CLI tools and Playwright HM modules; NixOS-WSL system mechanism |
 | G10 | Mihomo, GUI container/resources, explicit Windows shortcuts and bounded WSL GUI/device profile |
 | Pi S1a | Caller-pinned Pi extension recipes and explicit all-profile installer paths |
-| Pi S1b | Opt-in HM Pi workspace mechanism and shared installer/helpers; extensions and policy resources remain caller-owned |
+| Pi S1b | Opt-in HM Pi workspace mechanism and shared installer/helpers; resource selection and personal policy remain caller-owned |
+| Pi S1c | Generic extension source bundle, explicit wiki model-policy factory and caller-pinned native checks |
 
 P3 is not complete. Remaining application implementations, fleet CLI,
 deployment export and a VPS host/installer still require migration. Private integration is managed separately by
@@ -339,8 +340,9 @@ Null omits that resource's installation, except `webSearch`: the web package is
 still registered using an explicit empty routing overlay. Existing installer
 semantics (including removal of obsolete provider/searchProvider selectors)
 remain unchanged. Model presets require both extension and seed, or neither.
-No rubric, presets, extension implementation or skill content is provided by
-core. Caller resources entering the store must never contain credentials.
+The module supplies no rubric, presets or default extension/skill resources.
+Callers may select generic extensions from the S1c bundle below; personal policy
+stays outside core. Caller resources entering the store must never contain credentials.
 Bell suppression runs only when its caller extension is supplied. With all
 resources supplied, the legacy 15 activation entries and eight direct links are
 retained. There is no generic linker/discovery refactor or reviewer-policy patch.
@@ -353,6 +355,60 @@ The HOME-with-spaces case is eval-only: the pinned HM generation contains an
 upstream unquoted profile path that fails shell syntax validation at build time.
 Default `pi-workspace-installers` runs 12 synthetic helper/installer tests;
 `pi-dependencies` guards the nullable resource boundary and source exports.
+
+## Generic Pi extensions (S1c)
+
+`lib.piExtensions` supplies the ten existing resource slots without changing
+HM's nullable defaults or the shared installers. Pass selected paths explicitly
+through `programs.piWorkspace.resources.extensions` and the same paths to a
+container's caller-owned software adapter. The model-presets extension still
+requires a caller seed. Bell and statusline remain separate; this slice does
+not enable sound, restart Pi or initialize persistent HOME.
+
+The bundle contains bell, statusline, clear, codex-limits, compact-prompts/tools,
+model-presets, lazy-capabilities, context-handoff and wiki-ask. No private prompts,
+rubrics, model/web seeds, legacy subagents, reviewer patches or audio assets are
+included. Context-handoff's project opt-in/trust and lazy-capabilities' installed
+resource injection contracts are unchanged. Neither is a sandbox.
+
+The unconfigured wiki-ask bundle requires a project model. To retain a caller's
+existing fallback without publishing it as a core preference:
+
+```nix
+extensions = core.lib.piExtensions // {
+  wikiAsk = core.lib.mkPiWikiAsk {
+    inherit pkgs;
+    defaultModel = "provider/model";
+  };
+};
+```
+
+The factory returns a five-file extension directory compatible with the existing
+installer. Its entry delegates to the same generic implementation through store
+paths; no checkout lookup or environment model fallback is added. Project model
+takes precedence and missing/invalid selected models fail explicitly. See the
+generic [wiki contract](modules/programs/pi/extensions/wiki-ask/README.md) and
+[handoff contract](modules/programs/pi/extensions/context-handoff/README.md).
+Generic local-code/transitive license clearance is not implied by source guards.
+
+Default `pi-extensions` uses Node 24 source-only mocks and fake workers.
+`pi-extension-dependencies` guards the exact source/import/policy boundary, adding
+two default checks (24 total). Real Pi and PTY contracts are explicit opt-in:
+
+```nix
+core.lib.mkPiExtensionChecks {
+  inherit pkgs;
+  pi = callerPinnedPi;
+}
+# { native; tui; }
+```
+
+These checks use temporary projects, local fake APIs/workers and synthetic
+history, not provider credentials or live Agents containers. Core adds no
+Pi/upstream input. compact-prompts still uses a narrow reversible adapter to
+Pi's runtime component property; test it on the caller pin rather than updating
+the SDK during migration. Native registration is not a TypeScript typecheck.
+Source/standalone checks are not publication approval or runtime acceptance.
 
 ## Checks
 
