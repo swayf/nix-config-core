@@ -1,0 +1,137 @@
+--- a/state/questionnaire-session.ts
++++ b/state/questionnaire-session.ts
+@@ -1,5 +1,6 @@
+ import type { Theme } from "@earendil-works/pi-coding-agent";
+-import type { Editor, OverlayHandle, TUI } from "@earendil-works/pi-tui";
++import type { Component, Editor, OverlayHandle, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
++import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+ import { COLLAPSE_KEY_OFF, formatKeySpecForDisplay } from "../config.js";
+ import type { QuestionData, QuestionnaireResult, QuestionParams } from "../tool/types.js";
+ import type { WrappingSelectItem } from "../view/components/wrapping-select.js";
+@@ -30,12 +31,15 @@
+ 	 * would hide the overlay into a state nothing can reopen.
+ 	 */
+ 	canReopenWhileHidden: boolean;
++	/** Places the passive reopen button in the host's above-editor widget area. */
++	setReopenWidget?: (component: Component | undefined) => void;
+ }
+ 
+ export interface QuestionnaireSessionComponent {
+ 	render(width: number): string[];
+ 	invalidate(): void;
+ 	handleInput(data: string): void;
++	handleMouse?(event: TuiMouseEvent): TuiMouseEventResult | undefined;
+ }
+ 
+ function initialState(): QuestionnaireState {
+@@ -82,6 +86,7 @@
+ 	 * and overlay-aware consumers (e.g. `pi-station`) can resume normal behaviour.
+ 	 */
+ 	private overlayHandle: OverlayHandle | undefined;
++	private updateReopenWidget: ((collapsed: boolean) => void) | undefined;
+ 
+ 	private readonly tui: QuestionnaireSessionConfig["tui"];
+ 	private readonly done: QuestionnaireSessionConfig["done"];
+@@ -115,14 +120,66 @@
+ 
+ 		this.component = this.assembleComponent(built, config.theme);
+ 		this.viewAdapter.apply(this.state);
++		this.installMouseReopen(config.theme, config.setReopenWidget);
++	}
++
++	/** A passive widget reserves a row above the editor, never covering the footer. */
++	private installMouseReopen(theme: Theme, setWidget: QuestionnaireSessionConfig["setReopenWidget"]): void {
++		if (this.tui.mode !== "fullscreen" || !setWidget) return;
++		const label = " ▸ Развернуть анкету ";
++		let buttonWidth = 0;
++		const component: Component = {
++			render: (width) => {
++				const text = truncateToWidth(label, width);
++				buttonWidth = visibleWidth(text);
++				return [theme.fg("accent", text)];
++			},
++			invalidate() {},
++			handleMouse: (event) => {
++				if (!this.state.collapsed) return undefined;
++				return this.handleToggleMouse(event, buttonWidth);
++			},
++		};
++		this.updateReopenWidget = (collapsed) => setWidget(collapsed ? component : undefined);
++	}
++
++	private handleToggleMouse(event: TuiMouseEvent, buttonWidth: number): TuiMouseEventResult | undefined {
++		if (event.button !== "left" || event.y !== 0 || event.x < 0 || event.x >= buttonWidth) return undefined;
++		if (event.type === "press") return { handled: true, render: false };
++		if (event.type === "click") {
++			this.toggleCollapsedExternal();
++			return { handled: true, render: true };
++		}
++		return undefined;
++	}
++
++	/** Called from the tool's finally block on submit, cancellation, or failure. */
++	dispose(): void {
++		this.updateReopenWidget?.(false);
++		this.updateReopenWidget = undefined;
+ 	}
+ 
+ 	private assembleComponent(built: QuestionnaireBuilt, theme: Theme): QuestionnaireSessionComponent {
+ 		const collapsedRender = this.buildCollapsedRender(theme);
++		let buttonWidth = 0;
+ 		return {
+-			render: (width) => (this.state.collapsed ? collapsedRender(width) : built.render(width)),
++			render: (width) => {
++				if (this.state.collapsed) return collapsedRender(width);
++				const lines = built.render(width);
++				if (this.tui.mode === "fullscreen" && lines.length > 0) {
++					// Reuse the top border row so short terminals retain their footer.
++					const text = truncateToWidth(" ▾ Свернуть анкету ", width);
++					buttonWidth = visibleWidth(text);
++					lines[0] = theme.fg("accent", text);
++				}
++				return lines;
++			},
+ 			invalidate: built.invalidate,
+ 			handleInput: (data) => this.dispatch(data),
++			handleMouse: (event) => {
++				if (this.tui.mode !== "fullscreen" || this.state.collapsed) return undefined;
++				return this.handleToggleMouse(event, buttonWidth);
++			},
+ 		};
+ 	}
+ 
+@@ -195,10 +252,10 @@
+ 			case "set_overlay_hidden":
+ 				// No-op until `setOverlayHandle` has been called (the handle arrives via
+ 				// `ctx.ui.custom`'s `onHandle` right after the overlay is shown), and
+-				// suppressed entirely when no raw terminal listener exists — hiding would
+-				// then be irreversible (pi-tui routes no input to a hidden overlay), so the
+-				// visible one-line collapsed row serves as the fallback rendering instead.
+-				if (this.canReopenWhileHidden) this.overlayHandle?.setHidden(effect.hidden);
++				// Hide only with a reversible path: the raw key listener or the fullscreen
++				// mouse widget. Older hosts keep the visible one-line fallback instead.
++				this.updateReopenWidget?.(effect.hidden);
++				if (this.canReopenWhileHidden || this.updateReopenWidget) this.overlayHandle?.setHidden(effect.hidden);
+ 				return;
+ 			case "done":
+ 				this.done(effect.result);
+--- a/ask-user-question.ts
++++ b/ask-user-question.ts
+@@ -207,6 +207,9 @@
+ 			tui,
+ 			theme,
+ 			params: typed,
++			setReopenWidget: typeof ctx.ui.setWidget === "function"
++				? (component) => ctx.ui.setWidget("rpiv-questionnaire-reopen", component ? () => component : undefined, { placement: "aboveEditor" })
++				: undefined,
+ 			itemsByTab,
+ 			done,
+ 			keybindings,
+@@ -403,6 +406,7 @@
+ 
+ 				return buildQuestionnaireResponse(result, typed);
+ 			} finally {
++				sessionRef.current?.dispose();
+ 				removeOverlayInputListener?.();
+ 				emitAskUserBlockedEvent(pi, false);
+ 			}

@@ -14,6 +14,7 @@ Reusable core under incremental migration. Reviewed groups:
 | G8 | HM secret provider and GNOME/KDE/standalone/integrated WSL capability profiles |
 | G9 | Caller-pinned CLI tools and Playwright HM modules; NixOS-WSL system mechanism |
 | G10 | Mihomo, GUI container/resources, explicit Windows shortcuts and bounded WSL GUI/device profile |
+| Pi S1a | Caller-pinned Pi extension recipes and explicit all-profile installer paths |
 
 P3 is not complete. Remaining application implementations, fleet CLI,
 deployment export and a VPS host/installer still require migration. Private integration is managed separately by
@@ -272,6 +273,50 @@ Exporter 1.0.0 retains the original verified source/vendor hashes and recipe.
 Upstream license is MIT; no complete upstream/dependency security audit is
 implied. The standalone package enables no service and upstream listens on
 `:9550` by default: callers must choose safe listen/API flags explicitly.
+
+## Pi packages and installers (S1a)
+
+```nix
+packages = core.lib.mkPiPackages { inherit pkgs; };
+# { askUserQuestion; contextUsage; subagents; webAccess; }
+installers = core.lib.piInstallers;
+# Same four attribute names, each containing a source path.
+```
+
+The caller supplies `pkgs`; no Pi, Home Manager or additional nixpkgs input is
+selected. Versions remain questionnaire 2.12.0, context-usage 2.1.0, subagents
+0.77.0 and web-access 0.35.0. The questionnaire retains its Herdr state events,
+BEL suppression and fullscreen mouse patch. The other packages use their
+upstream release code; no reviewer admission/accounting patch is included.
+Locked npm runtime dependencies omit host-provided Pi/typebox peers and disable
+lifecycle scripts. Source hashes and dependency licenses are retained; this is
+not a complete upstream code, vulnerability or transitive licence audit.
+
+Invoke installers explicitly, with a writable `HOME`:
+
+```sh
+bash INSTALLER PACKAGE          # askUserQuestion / contextUsage
+python3 INSTALLER PACKAGE       # subagents
+python3 INSTALLER PACKAGE DEFAULTS_JSON  # webAccess
+```
+
+Nothing runs during Nix evaluation. These scripts discover the default agent,
+standard profiles and custom profile directories. Each retains its original
+link/settings migration rules; they are not a general safe-link abstraction.
+Subagents preserves conflicting legacy extensions outside discovery and keeps
+writable model settings. Web merges caller routing defaults and keeps unrelated
+settings/filters, with private backups outside the store. No routing JSON, model
+seed, agent rubric or personal skill is supplied. A missing defaults JSON means
+an empty routing overlay (existing installer semantics), not a private fallback.
+Do not put credentials in store inputs. Test with an isolated HOME before any
+activation. This slice exports no HM Pi module or Agents image/launcher.
+
+Default `pi-dependencies` guards the exact reviewed recipe/resource edges and
+public locked dependency sources; `pi-installers` runs 17 synthetic installer
+tests without Pi, credentials, network or package builds (21 default checks in
+total after S1a). Real Pi discovery and
+selected caller-pinned package builds are separate opt-in verification, not
+implied by these default checks.
 
 ## Checks
 

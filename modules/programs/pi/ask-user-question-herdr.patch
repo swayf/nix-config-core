@@ -1,0 +1,21 @@
+--- a/ask-user-question.ts
++++ b/ask-user-question.ts
+@@ -52,6 +52,9 @@
+ function emitAskUserBlockedEvent(pi: ExtensionAPI, active: boolean): void {
+ 	const payload: AskUserBlockedEventPayload = { active };
+ 	pi.events.emit(ASK_USER_BLOCKED_EVENT, payload);
++	// Keep the public rpiv event; also feed Herdr's official state integration.
++	// The integration gates RPC/headless sessions and reports state, not sound.
++	pi.events.emit("herdr:blocked", { active, label: "questionnaire" });
+ }
+ 
+ /** Non-interactive host backstop (the reconciler normally strips the tool first). */
+@@ -96,7 +99,7 @@
+  */
+ function emitTerminalAttention(): void {
+ 	try {
+-		if (process.stdout.isTTY) process.stdout.write(BEL);
++		// Herdr owns request notifications; no independent terminal BEL.
+ 	} catch {
+ 		// Terminal attention is best effort; the questionnaire must still proceed.
+ 	}

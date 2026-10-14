@@ -84,6 +84,14 @@
     in
     {
       lib.xrayMonitoringRules = import ./modules/nixos/xray-monitoring-rules.nix;
+      lib.mkPiPackages = import ./modules/programs/pi/packages.nix;
+      # Paths only: callers choose when to run these against a writable HOME.
+      lib.piInstallers = {
+        askUserQuestion = ./modules/programs/pi/install-ask-user-question.sh;
+        contextUsage = ./modules/programs/pi/install-context-usage.sh;
+        subagents = ./modules/programs/pi/install-subagents.py;
+        webAccess = ./modules/programs/pi/install-web-access.py;
+      };
       # Explicit opt-in: expensive multi-VM acceptance is not a default offline check.
       lib.mkXrayMonitoringTest = { pkgs }: import ./scripts/test-xray-monitoring-vm.nix {
         inherit pkgs;
@@ -135,6 +143,13 @@
       };
 
       checks.${system} = {
+        pi-dependencies = pkgs.runCommand "pi-dependency-guards" {
+          nativeBuildInputs = [ pkgs.python3 ];
+        } ''
+          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-pi-dependencies.py
+          touch $out
+        '';
+        pi-installers = import ./tests/pi-installers.nix { inherit pkgs; };
         gui-proxy-dependencies = pkgs.runCommand "gui-proxy-dependency-guards" {
           nativeBuildInputs = [ pkgs.python3 ];
         } ''
