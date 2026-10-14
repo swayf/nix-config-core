@@ -84,6 +84,18 @@
     in
     {
       lib.xrayMonitoringRules = import ./modules/nixos/xray-monitoring-rules.nix;
+      lib.mkAgentsImage = import ./modules/home-manager/agents-container/image.nix;
+      lib.mkAgentsLauncherText = import ./modules/home-manager/agents-container/launcher.nix;
+      lib.agentsRuntimeHelpers = {
+        processPreflight = ./modules/home-manager/agents-container/process-preflight.sh;
+        secretEnvironment = ./modules/home-manager/agents-container/secret-environment.py;
+        clipboard = ./modules/home-manager/agents-container/clipboard.py;
+        sound = ./modules/home-manager/agents-container/sound.py;
+        soundClient = ./modules/home-manager/agents-container/sound-client.py;
+      };
+      lib.mkAgentsChecks = args: import ./tests/agents-home.nix (args // {
+        module = self.homeManagerModules.agents-container;
+      });
       lib.mkPiPackages = import ./modules/programs/pi/packages.nix;
       # Paths only: callers choose when to run these against a writable HOME.
       lib.piInstallers = import ./modules/programs/pi/installers.nix;
@@ -112,6 +124,7 @@
         module = self.nixosModules.wsl;
       });
       homeManagerModules = {
+        agents-container = ./modules/home-manager/agents-container.nix;
         pi = ./modules/home-manager/pi.nix;
         mihomo = ./modules/home-manager/mihomo.nix;
         gui-container = ./modules/home-manager/gui-container.nix;
@@ -145,6 +158,13 @@
       };
 
       checks.${system} = {
+        agents-helpers = import ./tests/agents-helpers.nix { inherit pkgs; };
+        agents-dependencies = pkgs.runCommand "agents-dependency-guards" {
+          nativeBuildInputs = [ pkgs.python3 ];
+        } ''
+          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-agents-dependencies.py
+          touch $out
+        '';
         pi-extension-dependencies = pkgs.runCommand "pi-extension-dependency-guards" {
           nativeBuildInputs = [ pkgs.python3 ];
         } ''

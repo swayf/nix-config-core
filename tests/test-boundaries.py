@@ -8,6 +8,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWLIST = {
     ".gitignore",
+    "LICENSE",
     "README.md",
     "flake.nix",
     "flake.lock",
@@ -159,6 +160,23 @@ ALLOWLIST = {
     "tests/pi-extensions.nix",
     "tests/test-pi-extension-dependencies.py",
     "tests/test-pi-extension-load.py",
+    "modules/home-manager/agents-container.nix",
+    "modules/home-manager/agents-container/image.nix",
+    "modules/home-manager/agents-container/launcher.nix",
+    "modules/home-manager/agents-container/launcher.sh",
+    "modules/home-manager/agents-container/process-preflight.sh",
+    "modules/home-manager/agents-container/secret-environment.py",
+    "modules/home-manager/agents-container/clipboard.py",
+    "modules/home-manager/agents-container/sound.py",
+    "modules/home-manager/agents-container/sound-client.py",
+    "modules/home-manager/agents-container/test-launcher.py",
+    "modules/home-manager/agents-container/test-process-preflight.py",
+    "modules/home-manager/agents-container/test-secret-environment.py",
+    "modules/home-manager/agents-container/test-clipboard.py",
+    "modules/home-manager/agents-container/test-sound.py",
+    "tests/agents-helpers.nix",
+    "tests/agents-home.nix",
+    "tests/test-agents-dependencies.py",
 }
 
 
@@ -217,6 +235,10 @@ class BoundaryTests(unittest.TestCase):
                 # The immutable image uses a fixed, non-host container HOME.
                 if name.startswith("modules/home-manager/gui-container/"):
                     text = text.replace("/home/gui", "/container-home").replace("state/home/", "state/container-home/")
+                if name == "modules/home-manager/agents-container/image.nix":
+                    text = text.replace('/home/${username}', '/container-home/${username}')
+                if name == "modules/home-manager/agents-container.nix":
+                    text = text.replace('/home/${config.home.username}', '/container-home/${config.home.username}')
                 self.assertNotRegex(text, r"/(?:home|Users)/")
                 self.assertNotIn(".sops.yaml", text)
                 self.assertNotIn("install-attempt.json", text)

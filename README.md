@@ -17,12 +17,24 @@ Reusable core under incremental migration. Reviewed groups:
 | Pi S1a | Caller-pinned Pi extension recipes and explicit all-profile installer paths |
 | Pi S1b | Opt-in HM Pi workspace mechanism and shared installer/helpers; resource selection and personal policy remain caller-owned |
 | Pi S1c | Generic extension source bundle, explicit wiki model-policy factory and caller-pinned native checks |
+| Agents S2 | Low-level HM/image/launcher runtime with required software/proxy injection and the shared fail-closed gateway |
 
 P3 is not complete. Remaining application implementations, fleet CLI,
 deployment export and a VPS host/installer still require migration. Private integration is managed separately by
 caller-owned adapters and a pinned core input.
 No history from the private repository was copied. Only separately reviewed code
 and synthetic tests belong here; ciphertext and device identities remain caller-owned.
+
+## License
+
+Contributor-owned local code and documentation are licensed under the
+[MIT License](LICENSE), copyright 2026 nix-config-core contributors.
+Third-party code, upstream-derived portions of patches, fetched dependencies
+and packaged software retain their respective licenses and notices; the root
+license does not relicense them. Package metadata and lockfile license fields
+are not a complete transitive license audit. Distribution of built packages or
+container images requires separate compliance with their dependency licenses.
+Caller-owned private resources are outside this grant.
 
 ## Runtime module API
 
@@ -409,6 +421,47 @@ Pi/upstream input. compact-prompts still uses a narrow reversible adapter to
 Pi's runtime component property; test it on the caller pin rather than updating
 the SDK during migration. Native registration is not a TypeScript typecheck.
 Source/standalone checks are not publication approval or runtime acceptance.
+
+## Agents low-level runtime (S2)
+
+Import `homeManagerModules.agents-container`, supplying standard HM identity and
+caller `pkgs`. Enabling `services.agents-container` requires `software = {
+packages; environment; etcFiles; homeInit; }` and `proxy.{port,httpProxy}`.
+There is no implicit software import, SOPS selection, Mihomo enablement or
+personal resource default. `proxy.listen` must be loopback; `directPort` defaults
+to null and enables only explicit proxy opt-in, never a TUN fallback.
+`proxy.service` optionally supplies a host unit dependency.
+
+KVM, GPU devices, clipboard, sound and Nix token sharing are disabled by default.
+The caller chooses image/container names, timezone, project directory name,
+state/shared directories and Podman executable. `shellCommand` defaults to Bash;
+`updateInput` defaults to null (explicit caller lock updates, no implicit agent
+package input). `secretSources` maps environment
+names to absolute runtime file strings or null, not secret values. Validation
+lexically normalizes repeated separators, `.` and `..`, rejecting `/nix/store`
+and its descendants without reading files. The original runtime strings are
+preserved; evaluation does not resolve symlinks or verify their final targets.
+The launcher stages only these files on runtime tmpfs and dedicated Nix auth in private state;
+images, Docker Env and Podman arguments never receive their contents. Existing
+processes retain inherited credentials after rotation. Sound event maps/audio
+assets remain host-owned; guests send only event names. Host display, microphone,
+Nix store and daemon sockets are not mounted.
+
+`lib.mkAgentsImage { pkgs; lib; username; software; imageName; timeZone;
+projectDirectoryName; minimumFreePids ? 256; }` exposes `image` and `root`.
+`lib.mkAgentsLauncherText` renders validated technical names; compatibility
+adapters can preserve their earlier `runtimeSpec` hash schema without a second
+launcher implementation. `lib.agentsRuntimeHelpers` exposes the unchanged
+preflight, secret, clipboard, sound and sound-client paths.
+
+`lib.mkAgentsChecks { nixpkgs; homeManager; }` returns synthetic `result`, `check`,
+`image`, `gateway`, `launcher` and `brokerLauncher` targets with caller-owned pins.
+Default `agents-helpers` and `agents-dependencies` use mock Podman/backends and
+temporary HOME/state, bringing default checks to 26. Builds do not activate or
+start containers. Preflight is a snapshot, not a reservation or proof of ancestor
+limits. The inherited seccomp/AppArmor/unmask allowances for nested workloads
+remain a security trade-off; this slice is not a sandbox or publication/license
+approval. Production integration and runtime acceptance are separate.
 
 ## Checks
 

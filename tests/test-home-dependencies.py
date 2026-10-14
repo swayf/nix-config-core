@@ -24,6 +24,11 @@ class HomeDependencies(unittest.TestCase):
                 for token in ("userConfig", "inputs.", "personal.yaml", "recipients", "lt1-", "swayf"):
                     self.assertNotIn(token, text, path)
                 self.assertNotRegex(text, r"\bshared\.[A-Za-z_]")
+                if path.name == "agents-container.nix":
+                    # Container HOME is derived from standard HM identity,
+                    # not a host lookup or a caller identity declaration.
+                    text = text.replace('/home/${config.home.username}', '/container-home/${config.home.username}')
+                    text = text.replace('username = config.home.username;', 'containerUser = standardHMUser;')
                 self.assertNotRegex(text, r"/(?:home|Users)/|AGE-SECRET-KEY-|PRIVATE KEY")
                 self.assertNotRegex(text, r"(?:home|system)\.stateVersion\s*=")
                 self.assertNotRegex(text, r"(?:home\.)?(?:username|homeDirectory)\s*=")
