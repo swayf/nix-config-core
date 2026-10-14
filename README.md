@@ -15,6 +15,7 @@ Reusable core under incremental migration. Reviewed groups:
 | G9 | Caller-pinned CLI tools and Playwright HM modules; NixOS-WSL system mechanism |
 | G10 | Mihomo, GUI container/resources, explicit Windows shortcuts and bounded WSL GUI/device profile |
 | Pi S1a | Caller-pinned Pi extension recipes and explicit all-profile installer paths |
+| Pi S1b | Opt-in HM Pi workspace mechanism and shared installer/helpers; extensions and policy resources remain caller-owned |
 
 P3 is not complete. Remaining application implementations, fleet CLI,
 deployment export and a VPS host/installer still require migration. Private integration is managed separately by
@@ -280,7 +281,7 @@ implied. The standalone package enables no service and upstream listens on
 packages = core.lib.mkPiPackages { inherit pkgs; };
 # { askUserQuestion; contextUsage; subagents; webAccess; }
 installers = core.lib.piInstallers;
-# Same four attribute names, each containing a source path.
+# Those four names plus sharedModels, disableBell and resource installer paths.
 ```
 
 The caller supplies `pkgs`; no Pi, Home Manager or additional nixpkgs input is
@@ -309,7 +310,7 @@ settings/filters, with private backups outside the store. No routing JSON, model
 seed, agent rubric or personal skill is supplied. A missing defaults JSON means
 an empty routing overlay (existing installer semantics), not a private fallback.
 Do not put credentials in store inputs. Test with an isolated HOME before any
-activation. This slice exports no HM Pi module or Agents image/launcher.
+activation. No Agents image/launcher is exported by this slice.
 
 Default `pi-dependencies` guards the exact reviewed recipe/resource edges and
 public locked dependency sources; `pi-installers` runs 17 synthetic installer
@@ -317,6 +318,41 @@ tests without Pi, credentials, network or package builds (21 default checks in
 total after S1a). Real Pi discovery and
 selected caller-pinned package builds are separate opt-in verification, not
 implied by these default checks.
+
+## Pi workspace mechanism (S1b)
+
+Import `core.homeManagerModules.pi` and set `programs.piWorkspace.enable = true`.
+The module uses caller `pkgs`, preserves the existing HM activation DAG and
+installs the four pinned packages. It never selects Pi/HM inputs or activates HOME
+at evaluation/build time. `lib.piInstallers` additionally exports `sharedModels`,
+`disableBell`, `packetReviewer`, `bell`, `statusline`, `compactPrompts`,
+`compactTools`, `modelPresets`, `brainstorming`, `lazyCapabilities`, `wikiAsk` and
+`contextHandoff`. Host and container callers use the same unchanged scripts;
+container lifecycle/composition remains caller-owned.
+
+All `programs.piWorkspace.resources` paths default to null:
+
+- `packetReviewer`, `modelPresets`, `webSearch`, `brainstormingSkill`;
+- `extensions.{bell,statusline,compactPrompts,compactTools,modelPresets,lazyCapabilities,wikiAsk,contextHandoff,codexLimits,clear}`.
+
+Null omits that resource's installation, except `webSearch`: the web package is
+still registered using an explicit empty routing overlay. Existing installer
+semantics (including removal of obsolete provider/searchProvider selectors)
+remain unchanged. Model presets require both extension and seed, or neither.
+No rubric, presets, extension implementation or skill content is provided by
+core. Caller resources entering the store must never contain credentials.
+Bell suppression runs only when its caller extension is supplied. With all
+resources supplied, the legacy 15 activation entries and eight direct links are
+retained. There is no generic linker/discovery refactor or reviewer-policy patch.
+
+`core.lib.mkPiChecks { nixpkgs; homeManager; }` returns `result`, `check`,
+`activation` and `fullActivation`. It uses independent synthetic resources and
+caller-owned pins, covering enabled/disabled/absent/incomplete resources, the
+HM DAG and alternate HOME values. Generation builds do not execute activation.
+The HOME-with-spaces case is eval-only: the pinned HM generation contains an
+upstream unquoted profile path that fails shell syntax validation at build time.
+Default `pi-workspace-installers` runs 12 synthetic helper/installer tests;
+`pi-dependencies` guards the nullable resource boundary and source exports.
 
 ## Checks
 

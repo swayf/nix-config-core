@@ -86,12 +86,10 @@
       lib.xrayMonitoringRules = import ./modules/nixos/xray-monitoring-rules.nix;
       lib.mkPiPackages = import ./modules/programs/pi/packages.nix;
       # Paths only: callers choose when to run these against a writable HOME.
-      lib.piInstallers = {
-        askUserQuestion = ./modules/programs/pi/install-ask-user-question.sh;
-        contextUsage = ./modules/programs/pi/install-context-usage.sh;
-        subagents = ./modules/programs/pi/install-subagents.py;
-        webAccess = ./modules/programs/pi/install-web-access.py;
-      };
+      lib.piInstallers = import ./modules/programs/pi/installers.nix;
+      lib.mkPiChecks = args: import ./tests/pi-home.nix (args // {
+        module = self.homeManagerModules.pi;
+      });
       # Explicit opt-in: expensive multi-VM acceptance is not a default offline check.
       lib.mkXrayMonitoringTest = { pkgs }: import ./scripts/test-xray-monitoring-vm.nix {
         inherit pkgs;
@@ -111,6 +109,7 @@
         module = self.nixosModules.wsl;
       });
       homeManagerModules = {
+        pi = ./modules/home-manager/pi.nix;
         mihomo = ./modules/home-manager/mihomo.nix;
         gui-container = ./modules/home-manager/gui-container.nix;
         gui-windows-shortcuts = ./modules/home-manager/gui-container/windows-shortcuts.nix;
@@ -143,6 +142,7 @@
       };
 
       checks.${system} = {
+        pi-workspace-installers = import ./tests/pi-workspace-installers.nix { inherit pkgs; };
         pi-dependencies = pkgs.runCommand "pi-dependency-guards" {
           nativeBuildInputs = [ pkgs.python3 ];
         } ''

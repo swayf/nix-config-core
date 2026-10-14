@@ -56,8 +56,11 @@ class PiDependencies(unittest.TestCase):
                 continue
             with self.subTest(path=path):
                 text = path.read_text()
-                self.assertNotRegex(text, r"projects_kvm|soft-factory|swayf|reviewer-policy|packet-reviewer\.md")
+                self.assertNotRegex(text, r"projects_kvm|soft-factory|swayf|reviewer-policy")
                 self.assertNotRegex(text, r"AGE-SECRET-KEY-|-----BEGIN [A-Z ]*PRIVATE KEY-----")
+        self.assertFalse((PI / "agents").exists())
+        self.assertFalse((PI / "extensions").exists())
+        self.assertFalse((PI / "skills").exists())
         self.assertFalse((PI / "web-search.json").exists())
         self.assertFalse((PI / "model-presets.json").exists())
         self.assertNotIn("integration.patch", (PI / "subagents.nix").read_text())
@@ -65,14 +68,29 @@ class PiDependencies(unittest.TestCase):
     def test_explicit_installers_and_caller_package_factory_exports(self):
         flake = (ROOT / "flake.nix").read_text()
         self.assertIn("lib.mkPiPackages = import ./modules/programs/pi/packages.nix;", flake)
-        for name in ("install-ask-user-question.sh", "install-context-usage.sh",
-                     "install-subagents.py", "install-web-access.py"):
-            self.assertIn(f"./modules/programs/pi/{name};", flake)
+        self.assertIn("lib.piInstallers = import ./modules/programs/pi/installers.nix;", flake)
+        exports = (PI / "installers.nix").read_text()
+        paths = set(re.findall(r"\./([A-Za-z0-9-]+\.(?:sh|py))", exports))
+        self.assertEqual(paths, {p.name for p in PI.iterdir() if p.suffix in (".sh", ".py")})
+        for name in paths:
+            self.assertTrue((PI / name).is_file())
         for name in ("install-subagents.py", "install-web-access.py"):
             text = (PI / name).read_text()
             self.assertIn("sys.argv[1]", text)
             self.assertNotIn("requests", text)
             self.assertNotIn("subprocess", text)
+
+    def test_pi_module_has_explicit_nullable_resources_and_no_private_edges(self):
+        text = (ROOT / "modules/home-manager/pi.nix").read_text()
+        self.assertEqual(set(re.findall(r"\.\./programs/pi/[A-Za-z0-9-]+\.nix", text)), {
+            "../programs/pi/installers.nix", "../programs/pi/packages.nix",
+        })
+        self.assertIn("default = null;", text)
+        self.assertIn("lib.types.nullOr lib.types.path", text)
+        self.assertIn('pkgs.writeText "pi-empty-web-search.json" "{}\\n"', text)
+        self.assertNotRegex(text, r"\b(?:inputs|userConfig|builtins\.getFlake)\b|/home/|projects_kvm")
+        for token in ("./pi/agents", "./pi/extensions", "./pi/skills", "web-search.json;", "model-presets.json;"):
+            self.assertNotIn(token, text)
 
 
 if __name__ == "__main__":
