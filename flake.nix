@@ -84,6 +84,23 @@
     in
     {
       lib.xrayMonitoringRules = import ./modules/nixos/xray-monitoring-rules.nix;
+      lib.mkAgentsSoftware = import ./modules/home-manager/agents-container/software.nix;
+      lib.mkAgentsPackages = import ./modules/home-manager/agents-container/packages.nix;
+      lib.mkAgentsNoticeBundle = import ./modules/home-manager/agents-container/notice-bundle.nix;
+      # Explicit caller package set; paired Herdr patches and activation stay caller-owned.
+      lib.mkAgentsRadarPackage = import ./modules/home-manager/agents-container/radar-package.nix;
+      # Paths only: callers supply sources/config and explicitly invoke the helpers.
+      lib.agentsInstallers = {
+        claudeProfile = ./modules/home-manager/agents-container/claude-profile.py;
+        herdrNavigation = ./modules/home-manager/agents-container/install-herdr-navigation.py;
+        herdrProjects = ./modules/home-manager/agents-container/install-herdr-projects.py;
+        herdrRadar = ./modules/home-manager/agents-container/install-herdr-radar.py;
+        herdrReviewPlugins = ./modules/home-manager/agents-container/install-herdr-review-plugins.py;
+        piPrompts = ./modules/home-manager/agents-container/install-pi-prompts.py;
+        piShell = ./modules/home-manager/agents-container/install-pi-shell.py;
+        terminalBrowser = ./modules/home-manager/agents-container/install-terminal-browser.py;
+        wikiInit = ./modules/home-manager/agents-container/wiki-init.sh;
+      };
       lib.mkAgentsImage = import ./modules/home-manager/agents-container/image.nix;
       lib.mkAgentsLauncherText = import ./modules/home-manager/agents-container/launcher.nix;
       lib.agentsRuntimeHelpers = {
@@ -158,6 +175,22 @@
       };
 
       checks.${system} = {
+        agents-notices = import ./tests/agents-notices.nix { inherit pkgs; };
+        agents-radar-package = import ./tests/agents-radar-package.nix { inherit pkgs; };
+        agents-software = (import ./tests/agents-software.nix { inherit pkgs; }).check;
+        agents-software-dependencies = pkgs.runCommand "agents-software-dependency-guards" {
+          nativeBuildInputs = [ pkgs.python3 ];
+        } ''
+          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-agents-software-dependencies.py
+          touch $out
+        '';
+        agents-installers = import ./tests/agents-installers.nix { inherit pkgs; };
+        agents-installers-dependencies = pkgs.runCommand "agents-installers-dependency-guards" {
+          nativeBuildInputs = [ pkgs.python3 pkgs.bash pkgs.coreutils ];
+        } ''
+          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-agents-installers-dependencies.py
+          touch $out
+        '';
         agents-helpers = import ./tests/agents-helpers.nix { inherit pkgs; };
         agents-dependencies = pkgs.runCommand "agents-dependency-guards" {
           nativeBuildInputs = [ pkgs.python3 ];

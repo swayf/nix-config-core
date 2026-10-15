@@ -1,0 +1,121 @@
+--- a/lib/frame.js
++++ b/lib/frame.js
+@@ -129,11 +129,6 @@
+     // with neither, the config's grouped/priority choice decides.
+     const grouped = viewMode === 'grouped' || (viewMode === null && herdr.panelGrouped(now));
+     const displayEntries = this.displayOrder(entries, viewMode, keys);
+-    // Boundaries are needed now — the per-pane loop indents by them — but the
+-    // group furniture is WRITTEN after that loop, because a header fades with
+-    // its workspace and whether a workspace is entirely stale is only known
+-    // once every one of its panes has a display.
+-    const heads = grouped ? state.groupBoundaries(displayEntries).heads : new Set();
+     // With `split_corner` on, the other panes of a split screen hang off the
+     // first with a corner: the last pane of each split, in the order the
+     // panel will draw them, so the corner under it closes the group instead
+@@ -157,20 +152,11 @@
+         if (!wsAgents.has(entry.workspace)) wsAgents.set(entry.workspace, []);
+         wsAgents.get(entry.workspace).push({ display, name: entry.name });
+       }
+-      // Herdr indents an entry's continuation rows for us. A head pane's state
+-      // line is row 2 and arrives indented already; a member's empty header
+-      // row collapses, so its state line IS row 1 and the indent has to be
+-      // ours. That asymmetry is why a worktree needs BOTH branches: give its
+-      // members the deeper indent without also adding one level for its head,
+-      // and the head sits a level shallower than the sessions it owns. An
+-      // orphan indents like a real child: its synthesised parent row puts its
+-      // own rows one level in, same as a child's explicit corner does. With no
+-      // headers at all (priority order) every line sits at the margin.
+-      // Depth: a group's first row sits at the margin, everything below it
+-      // one level in, a worktree's sessions one further. A split does not add
+-      // a level — its corner is the offset, and a fourth column of indent on
+-      // rows that are already the deepest in the list buys nothing.
+-      const depth = grouped ? (heads.has(entry.pane) ? 0 : 1) + (keys.nested(entry.workspace) ? 1 : 0) : 0;
++      // Nix-patched Herdr renders group headers separately and removes their
++      // tokens from agent rows. Every agent now starts on row 1, including
++      // the head, so none gets Herdr's continuation indent. Supply the same
++      // full indent for all children; worktree sessions sit one level deeper.
++      const depth = grouped ? 1 + (keys.nested(entry.workspace) ? 1 : 0) : 0;
+       const indent = state.INDENTS[Math.min(depth, state.INDENTS.length - 1)];
+       // A split pane draws as a plain member row by default. The corner it
+       // used to carry made every right-panel session read as a sub-thing of
+--- a/lib/state.js
++++ b/lib/state.js
+@@ -447,10 +447,12 @@
+   return { tabLabel: '', title };
+ }
+ 
+-// The row under `row_label = "tab"`: the tab's name, or the title when the
+-// tab was never named, so no row reads as a bare number or goes blank.
++// The row under `row_label = "tab"`: the tab's name, or its number followed
++// by the session title. With no tab label at all, keep only the title.
+ function tabRow(tabName, title) {
+-  if (!isNamedTab(tabName)) return titleRow(tabName, title);
++  if (!isNamedTab(tabName)) {
++    return { tabLabel: '', title: [tabName, title].filter(Boolean).join(' · ') };
++  }
+   return { tabLabel: '', title: tabName };
+ }
+ 
+@@ -465,7 +467,7 @@
+ // title, and the title itself. An unknown mode names it by its title.
+ //
+ //   rowText('tab', 'architect', 'Architect::QA') → { tabLabel: '', title: 'architect' }
+-//   rowText('tab', '1', 'Architect::QA')         → { tabLabel: '', title: 'Architect::QA' }
++//   rowText('tab', '1', 'Architect::QA')         → { tabLabel: '', title: '1 · Architect::QA' }
+ function rowText(rowLabel, tabName, title) {
+   const pick = ROW_TEXT[rowLabel] ?? titleRow;
+   return pick((tabName ?? '').trim(), title);
+@@ -731,6 +733,9 @@
+       // rather than as the whole thing being asleep.
+       const stale = label !== null && staleWorkspaces.has(entry.workspace);
+       return herdr.reportMetadataAsync(entry.pane, source, {
++        // Opt into interactive workspace groups in the Nix-patched Herdr.
++        // Every child carries identity; only the head carries display text.
++        group_id: entry.workspace ?? null,
+         group: stale ? null : label,
+         group_stale: stale ? label : null,
+         // Only an orphan's head carries it; everywhere else the row collapses,
+@@ -755,6 +760,7 @@
+   const results = await Promise.all(
+     entries.map((entry) =>
+       herdr.reportMetadataAsync(entry.pane, source, {
++        group_id: null,
+         group: null,
+         group_parent: null,
+         group_stale: null,
+@@ -768,6 +774,7 @@
+ // Every pane token the state path owns. `harness_logo` is deliberately not
+ // here: agent-icons.js writes it and manages its own lifecycle.
+ const OWNED_TOKENS = [
++  'group_id',
+   'group',
+   'group_parent',
+   'group_stale',
+--- a/tools/check.js
++++ b/tools/check.js
+@@ -475,10 +475,10 @@
+     ['tab', 'architect', { tabLabel: '', title: 'architect' }],
+     ['both', 'architect', { tabLabel: 'architect', title: 'Architect::QA' }],
+     ['tab', '', { tabLabel: '', title: 'Architect::QA' }],
+-    ['tab', '1', { tabLabel: '', title: 'Architect::QA' }],
++    ['tab', '1', { tabLabel: '', title: '1 · Architect::QA' }],
+     // A name that is only whitespace, or a number wrapped in it, is no name.
+     ['tab', '   ', { tabLabel: '', title: 'Architect::QA' }],
+-    ['tab', ' 12 ', { tabLabel: '', title: 'Architect::QA' }],
++    ['tab', ' 12 ', { tabLabel: '', title: '12 · Architect::QA' }],
+     ['tab', ' qa ', { tabLabel: '', title: 'qa' }],
+   ];
+   for (const [mode, tab, expected] of cases) {
+--- a/tools/prove-checks.js
++++ b/tools/prove-checks.js
+@@ -489,8 +489,8 @@
+   // lib/state.js, lib/config.js — row_label names the row as documented.
+   [
+     'lib/state.js',
+-    '  if (!isNamedTab(tabName)) return titleRow(tabName, title);\n',
+-    '',
++    '  if (!isNamedTab(tabName)) {\n',
++    '  if (false) {\n',
+     'row_label: a tab-only row with an unnamed tab goes blank',
+   ],
+   [

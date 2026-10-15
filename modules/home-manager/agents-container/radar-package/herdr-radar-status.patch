@@ -1,0 +1,144 @@
+--- a/lib/state.js
++++ b/lib/state.js
+@@ -501,27 +501,7 @@
+   // per entry, a member pane's row IS the first row.
+   const logo = logoFor(entry.name);
+ 
+-  // Motion rides in front of the TITLE, not on the mark. A logo in a terminal
+-  // cell can only move a few pixels, and a few pixels of moving leg or eye is
+-  // a twitch you have to already be looking at; a spinner ahead of a sentence
+-  // has the whole row to be noticed from. It is also where the agents that
+-  // announce themselves put it — grok writes "- Thinking -" into its terminal
+-  // title — except doing it here covers every agent instead of the ones whose
+-  // CLI happens to.
+-  // Which states earn a mark in front of the title. The three idle tiers do
+-  // not: their colour already says how long ago, and a mark on every row is a
+-  // column of marks, which is no signal at all. The rest are events — still
+-  // running, finished and unseen, waiting on an answer, unrecognised — and an
+-  // event deserves something the eye catches without reading the colour.
+-  // Motion rides in front of the TITLE, not on the logo. A logo in a terminal
+-  // cell can only move a few pixels, and a few pixels of moving leg or eye is
+-  // a twitch you have to already be looking at; a spinner ahead of a sentence
+-  // has the whole row to be noticed from. Animating the logo itself was built
+-  // and dropped: the mark turned, one glyph baked per angle, and what stopped
+-  // it was not the drawing but the cadence — a token change that alters what
+-  // is rendered waits about 100ms for Herdr to answer, so nothing can run
+-  // faster than roughly six frames a second, which a turning shape shows as a
+-  // stagger and a spinner does not.
++  // Active states animate in their own cell; idle tiers keep a static mark.
+   const lead =
+     display === 'working'
+       ? config.FRAMES[step % config.FRAMES.length]
+@@ -530,17 +510,19 @@
+         : ['done', 'unknown'].includes(display)
+           ? glyph
+           : '';
+-  const leadCell = lead ? `${lead} ` : '';
+-  // The tab label, when asked for, rides in front of the title too: the mark
+-  // that used to carry it is published but no longer rendered.
++  // One dedicated cell replaces Herdr's divider between logo and title.
++  // Keep the animation here so the tab number and title never move.
++  const status = lead || glyph;
++  // Tab labels stay with the title; the durable mark still records state.
+   const tab = tabLabel ? `${tabLabel} ` : '';
+   return {
+     mark: mark.join(' '),
++    status,
+     // The corner carries the indent when it is there, because it is drawn
+     // first; without one the logo carries it, as before.
+     split: corner ? indent + corner : '',
+     logo: logo ? (corner ? '' : indent) + logo : '',
+-    titlePrefix: (logo || corner ? '' : indent) + tab + leadCell,
++    titlePrefix: (logo || corner ? '' : indent) + tab,
+   };
+ }
+ 
+@@ -604,7 +586,7 @@
+ // second, which the server met with rising latency until the animation
+ // stuttered.
+ function stateTokens(display, line, title) {
+-  const tokens = {};
++  const tokens = { radar_status: line.status || null };
+   // One logo, under whichever name carries the style this frame needs. The
+   // other three are cleared: which name holds the glyph is the whole signal.
+   for (const name of LOGO_TOKENS) tokens[name] = null;
+@@ -639,7 +621,7 @@
+ }
+ 
+ function clearState(source, pane) {
+-  const tokens = { sort_key: null, ws_key: null, tab_key: null, [SPLIT_TOKEN]: null };
++  const tokens = { sort_key: null, ws_key: null, tab_key: null, radar_status: null, [SPLIT_TOKEN]: null };
+   for (const name of LOGO_TOKENS) tokens[name] = null;
+   for (const state of STATES) {
+     tokens[`name_${state}`] = null;
+@@ -782,6 +764,7 @@
+   'group_parent',
+   'group_stale',
+   'gap',
++  'radar_status',
+   'sort_key',
+   'ws_key',
+   'tab_key',
+--- a/lib/managed-config.js
++++ b/lib/managed-config.js
+@@ -350,6 +350,19 @@
+   return ids.size ? vendors.filter((vendor) => ids.has(vendor)) : [];
+ }
+ 
++// A single status cell keeps the row below Herdr's 16-token ceiling.
++function statusCell(state, working) {
++  const marks = [
++    [logos.stateGlyph('done'), state.done],
++    [logos.blockedFrame(0), state.blocked],
++    [logos.blockedFrame(logos.PULSE_STEPS), state.blocked],
++    [logos.stateGlyph('unknown'), state.unknown],
++    [logos.stateGlyph('idle'), state.idleNormal],
++  ];
++  const rules = marks.map(([mark, fg]) => `{ equals = ${JSON.stringify(mark)}, fg = "${fg}" }`);
++  return `{ token = "$radar_status", fg = "${working}", bold = false, dim = false, rules = [${rules.join(', ')}] }`;
++}
++
+ function logoCell(token, glyphs, ink, { bold = false, dim = false } = {}) {
+   const rules = Object.entries(palette.brand)
+     .filter(([vendor]) => vendor !== 'other' && glyphs[vendor])
+@@ -451,6 +464,7 @@
+         // because they have to look different.
+         logoCell('$logo_working', glyphs, ink),
+         cell('$logo_stale', state.idleStale),
++        statusCell(state, brand[vendor] ?? brand.other),
+         // A working title wears its vendor's colour. One shared warm colour
+         // was tried instead — the brand is on the glyph beside it anyway — and
+         // it flattened the panel: with thirty rows the hue is what tells one
+--- a/lib/frame.js
++++ b/lib/frame.js
+@@ -464,7 +464,7 @@
+     // skipping the write leaves the old token up — or, on a pane that had
+     // none, no state row at all, which renders its bare title at the margin
+     // looking like a group header.
+-    const key = line ? `${display}:${line.mark}:${line.split}:${line.logo}:${line.titlePrefix}:${title}` : '';
++    const key = line ? `${display}:${line.mark}:${line.split}:${line.logo}:${line.status}:${line.titlePrefix}:${title}` : '';
+     if (this.lastLine.get(pane) !== key && this.writable(`line:${pane}`, now)) {
+       // Send the difference, not the whole set: see state.stateTokens.
+       const tokens = line ? state.stateTokens(display, line, title) : null;
+--- a/lib/setup.js
++++ b/lib/setup.js
+@@ -43,10 +43,16 @@
+     // First run.
+   }
+   const fontMissing = !font.isInstalled();
+-  if (!force && done && !fontMissing) return notes;
+-
+   const report = managed.inspect();
+-  if (report.state === 'installable') {
++  // An existing setup stamp does not migrate rows after a package upgrade.
++  // Repair only our old sidebar block; leave foreign rows and rows-off alone.
++  const sidebar = report.text?.match(
++    /# >>> herdr-radar sidebar block([\s\S]*?)# <<< herdr-radar sidebar block/,
++  )?.[1];
++  const statusMissing = report.state === 'installed' && sidebar != null && !sidebar.includes('$radar_status');
++  if (!force && done && !fontMissing && !statusMissing) return notes;
++
++  if (report.state === 'installable' || statusMissing) {
+     const result = managed.apply();
+     notes.push(result.message);
+     if (result.ok) {

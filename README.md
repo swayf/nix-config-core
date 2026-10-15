@@ -18,6 +18,9 @@ Reusable core under incremental migration. Reviewed groups:
 | Pi S1b | Opt-in HM Pi workspace mechanism and shared installer/helpers; resource selection and personal policy remain caller-owned |
 | Pi S1c | Generic extension source bundle, explicit wiki model-policy factory and caller-pinned native checks |
 | Agents S2 | Low-level HM/image/launcher runtime with required software/proxy injection and the shared fail-closed gateway |
+| Agents software API | Explicit caller packages/resources composition; no recipes or personal defaults |
+| Agents Radar recipe R2 | Opt-in caller-pinned Radar package with paired-Herdr patch requirement; no activation |
+| Agents installers D2/D3 + prompt/wiki/Claude/Pi-shell slices D4 | Opt-in explicit-source seed/link helpers and explicit-policy session/wrapper mechanisms; no personal payloads, permission defaults or recipes |
 
 P3 is not complete. Remaining application implementations, fleet CLI,
 deployment export and a VPS host/installer still require migration. Private integration is managed separately by
@@ -462,6 +465,428 @@ start containers. Preflight is a snapshot, not a reservation or proof of ancesto
 limits. The inherited seccomp/AppArmor/unmask allowances for nested workloads
 remain a security trade-off; this slice is not a sandbox or publication/license
 approval. Production integration and runtime acceptance are separate.
+
+### Explicit software factory
+
+`lib.mkAgentsSoftware { pkgs; packages; environment; resources; homeInit; }`
+returns exactly `{ packages; environment; etcFiles; homeInit; }` for the runtime
+above. All five arguments are required, including explicit empty lists/sets/text.
+It uses the caller's `pkgs.lib`, preserves package order/duplicates and string
+contexts, and selects no package set or package inventory. For example:
+
+```nix
+software = core.lib.mkAgentsSoftware {
+  inherit pkgs;
+  packages = [ pkgs.hello ];
+  environment.FIXTURE_ONLY = "example";
+  resources = {
+    "agents/example/settings.json" = { text = builtins.toJSON { enabled = false; }; };
+    "agents/example/prompt.md" = { source = ./example-prompt.md; };
+  };
+  homeInit = ""; # Explicit caller shell text; never executed during evaluation.
+};
+```
+
+`resources` maps safe relative file names **below `agents/`** to exactly one of
+`{ text = <string>; }` or `{ source = <Nix file path>; }`. It is a text-file API,
+not a directory copier, binary asset installer or runtime path resolver. Strings
+are not accepted as `source`; callers can explicitly read generated resources
+into `text` when needed. Sources are read during evaluation and must exist;
+missing inputs, directory sources, unknown entry fields, unsafe names and
+file/directory overlaps fail instead of searching a checkout or choosing a
+fallback. Empty inputs produce empty output without inspecting HOME.
+
+Projects, prompts, wiki instructions, profile lists, presets, reviewer rubrics,
+preferences, shell flags and all seeding/linking policy belong to the caller.
+There are no semantic resource roles with implicit content. Runtime/shared paths
+and installer arguments must appear explicitly in caller `homeInit`; this API
+alone neither installs resources into HOME nor migrates existing state. The
+namespace restriction prevents this factory from replacing runtime-owned
+account/network files; the existing raw runtime software API is unchanged.
+Environment names must be ENV identifiers and values must be strings. Packages
+must be derivations. All inputs are public store content: **never supply secrets**.
+
+Run `python3 tests/test-agents-software.py` (or pass `--nixpkgs /explicit/source`)
+and `python3 tests/test-agents-software-dependencies.py`. The former runs offline
+Nix evaluations in a temporary local evaluator store and HOME; it does not build
+packages or execute `homeInit`. Default `agents-software` evaluates the native
+contracts in `tests/agents-software.nix` without a nested Nix CLI; Python additionally
+covers filesystem errors, omitted/unknown arguments and a copied factory.
+`agents-software-dependencies` wraps the bounded source guards. These checks do
+not establish production parity, source/license acceptance or real
+auth/session/runtime behavior.
+
+### Explicit Agents package mechanisms (B1)
+
+`lib.mkAgentsPackages { pkgs; sources; herdrResources; zcodeLock; }` returns
+`herdr`, `plus`, `navigator`, `reviewr`, `fileViewer`, `annotate`, `browser`,
+`code`, `wiki`, `zcode` and `microsandbox`. All inputs are required. It imports
+no package set and fetches nothing implicitly: `sources` contains caller-owned
+fetched derivations, not paths discovered from a checkout. The exact source
+attribute names are listed in `modules/home-manager/agents-container/packages.nix`.
+`herdrResources` supplies the four named patches and two Rust modules referenced
+by `packages/herdr.nix`; `zcodeLock` is an explicit npm lock file. Versions,
+modified Electron behavior, backend/native firmware ABI, hooks and wrappers are
+preserved. A caller must keep Herdr's group/status patches paired with Radar.
+This API does not run installers or assert upstream payload terms/correspondence.
+
+`lib.mkAgentsNoticeBundle { pkgs; package; manifest; texts; }` transports a
+caller-owned set into `out/share/licenses/PACKAGE/third-party` and
+`source/third-party-notices/PACKAGE`. Add its `out` to software packages to use
+an image root's existing `/share` transport. The manifest schema is version 1:
+`files` is a nonempty list of `{ path; stored; bytes; sha256; }` records. `path`
+is the destination, `stored` a relative file under `texts`. Metadata and manifest
+bytes are preserved, never rewritten as legal approval. Validation rejects
+unsafe/overlapping/duplicate paths, symlink inputs, missing/corrupt texts and
+existing output directories before writing either layout. The API copies only
+explicit files, not an inferred dependency graph. Completeness, binary linkage,
+redistribution and source-availability gates remain caller responsibilities.
+`agents-notices` tests byte transport using synthetic inputs only.
+
+### Opt-in Radar package (R2)
+
+`lib.mkAgentsRadarPackage { pkgs; }` packages pinned Radar 1.3.20 with its complete
+relative resource layout, fonts/notices and group/status patches. It uses only
+caller `pkgs` and does not install or start a plugin. The caller must supply
+Herdr with the paired `group_id`/agent-groups **and** `radar_status`/sidebar-status
+patches, plus runtime Node and fontconfig; this is not stock-Herdr compatibility.
+Personal themes, plugin config and inventory stay caller-owned.
+
+`tests/agents-radar-package.nix { pkgs; }` (default `agents-radar-package` check)
+builds the recipe with `node --test` and `node tools/check.js` in synthetic
+HOME/XDG paths with unavailable real Herdr/socket, then checks both TTF structures,
+checksums and unchanged font/notice bytes. Font rebuild, brand/license acceptance,
+real rendering/state behavior and publication remain separate gates.
+
+### Explicit Agents installers (D2/D3, slices D4 and D5)
+
+`lib.agentsInstallers` exports nine source paths, not activation hooks:
+
+```sh
+python3 HERDR_NAVIGATION POLICY_JSON ROOT CONFIG SOURCES...
+python3 HERDR_RADAR POLICY_JSON CONFIG PLUGIN_CONFIG SOURCE
+python3 HERDR_REVIEW_PLUGINS POLICY_JSON CONFIG SOURCES...
+python3 HERDR_PROJECTS SOURCE --config-dir WRITABLE_PLUS_CONFIG
+python3 PI_PROMPTS PROFILES_DIR SHARED_DIR FALLBACK_DIR
+python3 PI_SHELL POLICY_JSON ABSOLUTE_HOME shell
+python3 PI_SHELL POLICY_JSON ABSOLUTE_HOME pi
+python3 PI_SHELL POLICY_JSON ABSOLUTE_HOME wrappers
+python3 TERMINAL_BROWSER PACKAGED_PLUGIN_ROOT
+bash WIKI_INIT PROFILE ASSETS QMD_SKILL INSTRUCTIONS CONFIG_DIR LEGACY_CONFIG_DIR QMD_DIR CONFIG_SEED INDEX_SEED
+python3 CLAUDE_PROFILE POLICY_JSON install
+python3 CLAUDE_PROFILE POLICY_JSON record       # SessionStart JSON on stdin
+python3 CLAUDE_PROFILE POLICY_JSON run ARGS...
+```
+
+`HERDR_NAVIGATION` is `core.lib.agentsInstallers.herdrNavigation` (Python 3.11+).
+It accepts exactly these policy fields; this is synthetic data, not defaults:
+
+```json
+{
+  "plugins": ["fixture.chooser"],
+  "directories": ["plugin-data/chooser/items"],
+  "seeds": [{"path": "plugin-data/chooser/config.toml", "text": "[picker]\nauto = false\n"}],
+  "bindings": [{"key": "prefix+x", "action": "fixture.chooser.open", "description": "Chooser"}],
+  "backup_suffix": ".before-fixture",
+  "binding_comment": "# Fixture shortcuts."
+}
+```
+
+`ROOT` and the main TOML `CONFIG` are explicit paths; relative paths become
+absolute against cwd without resolving symlinks. There is no HOME/XDG lookup
+or bundled plugin ids, shortcuts, directories or seed content. Child
+paths are relative to ROOT with no `..`. Supply exactly one absolute source argument
+per plugin, in policy order; sources stay separate from JSON to retain caller Nix
+package dependency contexts without embedding derivations in `builtins.toFile`. Policy and
+seed/main TOML are validated before external calls. Each plugin is linked offline
+only when its registered root changes, preserving explicit disables. Existing
+seed files and symlinks (including dangling ones) are preserved. Missing shortcuts
+are appended only for enabled plugins, without occupying a configured key or
+replacing an action's remapped shortcut. A main-config symlink remains a symlink;
+its resolved target is backed up once (0600), then atomically replaced with the
+original permissions. Missing/dangling main configs are not repaired. Only an
+actual binding change queries status and reloads an already-running server.
+No download, plugin restart, server start/stop or seed-command execution occurs.
+The caller must supply a compatible `herdr` executable on PATH. Tests mock Herdr.
+Trusted parent symlinks are followed; this is not a sandbox or transaction across
+all outputs, and concurrent invocations are not locked. Real linking/reload is
+mutable runtime work requiring separate operator permission.
+
+`HERDR_RADAR` is `core.lib.agentsInstallers.herdrRadar` (Python 3.11+).
+All eight policy fields are mandatory; this example is synthetic, not defaults:
+
+```json
+{
+  "plugin": "fixture.panel",
+  "literal_tables": ["layout"],
+  "main_values": [{"table": "palette", "values": [{"key": "style", "value": "\"fixture\""}]}],
+  "plugin_seed": "variant = \"plain\"\n",
+  "plugin_values": [{"key": "follow", "value": "false"}],
+  "backup_suffix": ".before-fixture",
+  "actions": {"stop": "halt", "configure": "apply", "start": "begin"}
+}
+```
+
+Supply distinct explicit main/plugin config paths (relative to cwd allowed) and
+an absolute packaged source. No HOME/XDG discovery, presentation defaults, seed
+payloads or plugin/action ids are bundled. Table names are bare dotted names;
+owned keys are bare names with single-line TOML value text. Ordered lists retain
+caller key order and exact compatibility bytes. `literal_tables` requires literal
+uncommented headers; conflicting inline/dotted/commented tables are refused,
+not silently rewritten. Policy and both resulting TOML files are validated before
+writes or external calls. Empty/missing plugin config uses the caller seed;
+owned keys are updated while unowned content is kept. Write through valid
+symlinks without replacing them or changing existing target modes; refuse
+dangling config links. Before modifying nonempty files, save a link-local once
+backup with the caller suffix (0600). Existing backups are not overwritten.
+Link offline only on root changes, preserving explicit disables. Only for an
+enabled plugin and already-running server: after config changes or an existing
+plugin upgrade, invoke stop, configure, then start; otherwise invoke start only.
+Each action waits for its matching log to succeed (60-second timeout, 0.2-second
+poll); failure/timeout prevents later actions. No server/pane restart or download
+occurs. The caller supplies compatible Herdr on PATH. Parent/backup symlinks are
+trusted; no locking, atomic two-file transaction or rollback is provided. A later
+unchanged run starts only, so a failed configure is not automatically retried.
+Live linking/configuration/plugin actions require separate runtime permission.
+
+`HERDR_REVIEW_PLUGINS` is `core.lib.agentsInstallers.herdrReviewPlugins`
+(Python 3.11+). Its explicit policy has exactly five mandatory fields, for example:
+
+```json
+{
+  "plugins": ["fixture.reader"],
+  "defaults": [{"plugin": "fixture.reader", "text": "updates = false\n"}],
+  "bindings": [{"key": "prefix+x", "action": "fixture.reader.open", "description": "Reader"}],
+  "backup_suffix": ".before-fixture",
+  "binding_comment": "# Fixture shortcuts."
+}
+```
+
+There are no bundled ids, bindings, themes or config texts and no HOME/XDG lookup.
+Supply an explicit main `CONFIG` path (relative to cwd if not absolute) and one
+absolute source per plugin, in policy order. Sources stay outside the JSON to
+preserve caller Nix package contexts. Policy, seed TOML and existing main TOML
+are validated before external calls or changes. Linking, disables, occupied/remapped
+shortcuts, main-config links, once-backup permissions and missing/dangling config
+handling follow the Navigation contract above. For each supplied default, query
+`herdr plugin config-dir ID` and seed `config.toml` only if absent and not a symlink,
+including for disabled plugins. Existing files and valid/dangling links are kept.
+Only actual binding changes run `herdr config check`, then status and reload of
+an already-running server; a failed check stops before status/reload. This is not
+a transaction: links/seeds/bindings already written are not rolled back. A later
+run with no new bindings does not retry that check/reload. The compatible Herdr
+executable and trusted config-dir responses are caller-owned. No plugin actions
+(including capture/paste/send), downloads or server/pane start/stop/restart occur.
+Parent symlinks remain trusted, with no concurrency lock or runtime acceptance.
+
+`HERDR_PROJECTS` is `core.lib.agentsInstallers.herdrProjects`. Its required
+`SOURCE` supplies `projects/*.toml` and `worktrees/*.toml`; no templates are
+bundled or discovered in HOME. All TOML is parsed before writing. Files are
+published exclusively as writable copies; existing files and symlinks are kept.
+The compatibility marker `.workspace-templates-v1` preserves later edits and
+deletions on repeat runs. If `--config-dir` is omitted, the helper asks the
+caller-provided `herdr plugin config-dir cloudmanic.herdr-plus`. Template
+commands are data and are never executed during seeding.
+
+`TERMINAL_BROWSER` is `core.lib.agentsInstallers.terminalBrowser`. It queries
+`herdr plugin list --json` and links the explicit source for
+`zenbu-labs.terminal-browser`, only when its registered root differs. An explicit
+user disable is preserved on upgrades. There is no download, browser installation,
+server start/stop/restart or search for a source. The caller supplies compatible
+Herdr and Python 3.11+; a real Herdr link is an explicit mutable-state operation,
+not performed by evaluation or any default check.
+
+`PI_PROMPTS` is `core.lib.agentsInstallers.piPrompts`. All three directories are
+required: existing writable profile directories, preferred shared appends and
+caller-selected fallback appends. Each source uses `<profile>/APPEND_SYSTEM.md`;
+no profile names, prompt content, HOME lookup, environment override or image/checkout
+path is supplied. To omit fallback content, explicitly select an absent/empty
+directory. Relative arguments become absolute against the invocation directory,
+without resolving symlinks. Only existing profiles are visited; no profile is
+created. Shared regular files take precedence, otherwise a regular fallback is
+used. Only links whose exact stored pathname matches one of those two current
+sources may be switched. Local files/directories and user links, even dangling
+ones, remain untouched. If both sources are missing, existing links remain as-is.
+Changing source roots does not claim links to earlier roots. Atomic source saves
+remain visible without rerunning the installer. The shared-first/fallback rule
+and `APPEND_SYSTEM.md` filename retain the previous mechanism; source selection,
+profile layout and all personal policy/content remain caller-owned.
+
+`PI_SHELL` is `core.lib.agentsInstallers.piShell`. It requires Python 3 and an
+explicit JSON policy; the home argument must be absolute. All policy fields
+are mandatory, with no HOME/XDG discovery or bundled paths/profile defaults.
+The three modes let the caller retain initialization order around other installers.
+A complete synthetic policy is:
+
+```json
+{
+  "directories": ["bin", "config", "state"],
+  "bashrc": {
+    "destination": "rc", "source": "/tmp/fixture/interactive",
+    "marker": "source fixture-interactive", "append": "\\nsource fixture-interactive\\n"
+  },
+  "bash_profile": {
+    "destination": "login", "source": "/tmp/fixture/login",
+    "marker": "fixture-rc", "append": "\\n# fixture-rc\\n"
+  },
+  "links": [{"destination": "config/prompt", "source": "/tmp/fixture/prompt"}],
+  "pi": {
+    "wrapper": "bin/pi", "marker": "# Managed fixture wrapper.",
+    "executable": "/tmp/fixture/client", "interpreter": "/bin/sh",
+    "profiles_directory": "profiles", "legacy_agent_directory": "legacy",
+    "default_profile": "discussion", "profiles": ["discussion", "builder"],
+    "settings_source": "/tmp/fixture/profile-seeds",
+    "clipboard_socket": "/tmp/fixture/bridge.sock", "clipboard_display": ":fixture",
+    "profile_wrappers": {"bin/pi-build": "builder"},
+    "legacy_wrapper": {"destination": "bin/pi-old", "content": "#!/bin/sh\\n# old fixture\\nexec pi\\n"}
+  }
+}
+```
+
+Home-relative destinations reject absolute/empty/dot components; sources and
+executables must be absolute. Profile names are single components; the default
+and alias profiles must be in the explicit seed list. Missing/extra fields,
+invalid types and multiline/non-comment wrapper markers fail before mutation.
+Seeds and append strings are data, not executed by the installer.
+
+The `shell` mode creates the supplied home directories, links absent shell
+startup files and appends caller text to regular startup files when markers are
+missing (exact line for rc, substring for login). Rc symlinks are preserved.
+The login file and extra seed links retain the legacy dangling-link error rather
+than repairing or replacing the link; existing login-file symlinks may be appended
+through. Source links are allowed to be dangling.
+
+The `pi` mode upgrades only an absent wrapper or one containing the exact managed
+marker line, preserving unmarked existing wrappers. It retains the old write-through
+behavior for managed/dangling wrapper symlinks. The generated wrapper preserves
+argv/exit status and explicit `PI_CODING_AGENT_DIR`; otherwise the first
+`--session VALUE` before `--` restores an existing named profile or the legacy
+agent directory. Unknown/missing paths and picker/continue arguments use the
+caller default. Session files are never read. Clipboard DISPLAY is set only when
+both display variables are empty and the supplied socket exists. All path values
+are shell-quoted, and generated wrappers follow their runtime HOME.
+
+Each explicit profile gets `extensions`, `skills`, `prompts`, `themes` and a
+writable `settings.json` copied once from `settings_source/<profile>/settings.json`.
+Only a symlink whose stored text exactly equals that source pathname migrates;
+local files and other links (including dangling links and dot-path aliases) remain.
+The `wrappers` mode removes only the caller's exact legacy alias signature
+(line-count and line membership, matching the old grep checks), then rewrites
+every explicitly selected profile alias. Aliases execute `pi` from PATH.
+
+These are trusted-home compatibility mechanics, not a sandbox or transactional
+installer: parent symlinks and alias destinations may be written through, profile
+aliases are always overwritten, failures can leave partial changes, and concurrent
+writers are not locked. Do not supply secrets in policy/seeds. No auth/catalog
+content, session data, shell history, provider calls or live container lifecycle
+are managed here. Test explicit policy in a temporary HOME before activation.
+
+`WIKI_INIT` is `core.lib.agentsInstallers.wikiInit`. It requires Bash and coreutils
+(`mkdir`, `readlink`, `basename`, `mv`, `rm`, `ln`, `cat`). All nine nonempty paths
+are mandatory; relative paths become absolute against cwd without resolving
+symlinks. The caller chooses the writable profile, asset root (`skills/*/SKILL.md`),
+QMD skill, instructions, primary/legacy config directories, QMD directory and two
+seed files. There is no HOME/XDG discovery, vault/model/collection default, bundled
+instruction/seed content or upstream setup/index/download call. Seeds are copied
+verbatim as data, without shell expansion or sourcing; callers must render any
+intended path values themselves and keep secrets out of these public resources.
+
+The `skills/`, `wiki-skills/`, `AGENTS.md`, `wiki-instructions.md`, `qmd-cli`,
+`config` and `index.yml` names retain the compatibility protocol. Only links
+matching the supplied current source pathnames migrate from automatic `skills/`
+to `wiki-skills/`; conflicting user destinations and automatic overrides remain.
+Only the exact managed `AGENTS.md` link is removed; instructions are linked outside
+automatic discovery. Retired links under the current asset root are pruned, not
+user files/directories/links to other roots. A missing QMD skill still produces
+a dangling managed link, retaining the old behavior. Existing primary config
+directories (including symlinks) beat legacy; an existing legacy directory is used
+only when the primary path is absent and not a symlink. Existing `config` files,
+directories and dangling links are untouched and suppress index seeding. A missing
+config is seeded once; only then may a missing `index.yml` be seeded. Existing
+indexes, including directories/dangling links, are preserved. Needed seed files
+must be readable regular files before config creation; unused seeds need not exist.
+Writes are not transactional, concurrent invocations are not locked, and trusted
+parent/profile symlinks are not sandboxed. Selecting explicit paths is not a vault
+migration or runtime acceptance. Test in an isolated writable tree first.
+
+`CLAUDE_PROFILE` is `core.lib.agentsInstallers.claudeProfile`. It requires an explicit
+JSON policy with exactly these fifteen fields (synthetic example, not defaults):
+
+```json
+{
+  "state_dir": "/tmp/fixture/state",
+  "settings_path": "/tmp/fixture/config/settings.json",
+  "wrapper_path": "/tmp/fixture/bin/client",
+  "executable": "/tmp/fixture/client",
+  "argv0": "fixture-client",
+  "python": "python3",
+  "profile_env": "FIXTURE_PRESET",
+  "presets": {"plain": [], "tagged": ["--tag", "fixture"]},
+  "default_profile": "plain",
+  "selection_rules": [{"profile": "tagged", "flags": [], "options": {"--tag": "fixture"}}],
+  "explicit_flags": [],
+  "explicit_options": ["--tag"],
+  "resume_options": ["--resume", "-r"],
+  "legacy_scripts": [],
+  "legacy_store_suffixes": []
+}
+```
+
+All fields are required, including empty lists. Presets map nonempty names to
+argument lists; the default and every rule profile must be present. Rules are
+ordered: the first with all exact `flags` and all option/value matches wins,
+otherwise the default name is used. Option parsing accepts `--name VALUE` and
+`--name=VALUE`; only arguments before `--` participate. `explicit_flags` matches
+whole arguments, whereas `explicit_options` also recognizes equals forms. The
+first nonempty value in `resume_options` selects a session; absent explicit
+arguments, a known saved preset supplies its flags. Otherwise no extra flags are
+added. Pickers/continue behavior is entirely determined by the supplied option
+names. There are no embedded preset names, prompt paths or permission flags.
+
+The executable must be absolute; `python` is a command name available in the
+caller's PATH or an absolute interpreter. The policy argument becomes absolute
+against cwd; relative state/settings/wrapper fields are anchored to the logical
+policy parent, so later wrapper invocation from another cwd uses the same paths.
+Symlinks are not resolved and `~`/HOME/XDG are not expanded.
+The generated shell wrapper and SessionStart hook persist the logical script and
+policy paths, so callers should use stable paths across image replacements.
+`record` stores only the validated inherited profile name under a SHA-256 session
+filename, atomically with mode 0600; malformed events, unknown profiles and
+I/O errors are silently ignored. Missing/invalid policy is also silent for
+`record` (bookkeeping must not block), but fails `install`/`run` before writes/exec.
+No credentials, prompt or event content is logged or stored by the helper.
+
+Installation preserves unrelated settings/hooks and user wrappers. It collapses
+current exact interpreter/script/policy hooks and explicitly selected legacy
+three-argument hooks (`python SCRIPT record`); legacy scripts match exact paths
+or caller suffixes under `/nix/store/`. Other policy hooks stay intact. Legacy
+interpreter matching uses the supplied `python` string. SessionStart, `session_id`,
+saved `profile`, `/bin/sh` and the existing managed-wrapper marker remain protocol
+compatibility identifiers. Managed wrappers are atomically replaced with mode
+0755; custom files/directories and unmarked/dangling symlinks stay untouched.
+Malformed settings are not repaired; filesystem failures may leave partial
+installation. State is trusted caller-owned data, not authenticated authorization:
+select presets and writable state paths accordingly. Parent symlinks, concurrent
+writers and path aliases are not sandboxed or locked. Keep policy/script paths
+stable, and test with fixtures before any real mutable-state operation.
+
+Host/container callers may use these same paths directly or pass them explicitly
+as `mkAgentsSoftware` file resources and choose invocation in their own `homeInit`.
+No runtime module or software factory wires them automatically. Sources/config
+paths are trusted caller inputs; these helpers do not sandbox symlinked parent
+or profile directories, prevent concurrent filesystem changes or audit template
+commands. Keep credentials out of store resources.
+
+`agents-installers` runs synthetic temporary-HOME tests with a narrow fake Herdr
+and an eighteen-file source set independent of a private checkout. It also evaluates
+the exported paths through `mkAgentsSoftware`. `agents-installers-dependencies`
+guards the bounded stdlib/shell/source/export contract and reruns all nine suites
+after copying just those eighteen files into a temporary directory. Python-only suites
+run with empty PATH; Pi-shell tests additionally receive an explicit shell interpreter,
+and wiki tests receive only the declared Bash/coreutils tools. Synthetic auth/session
+sentinels only demonstrate that unrelated fixture files are untouched, not real
+auth/session, Pi or browser runtime acceptance. Recipes, personal templates and
+production integration remain separate gates.
 
 ## Checks
 
