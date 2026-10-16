@@ -19,12 +19,13 @@ Reusable core under incremental migration. Reviewed groups:
 | Pi S1c | Generic extension source bundle, explicit wiki model-policy factory and caller-pinned native checks |
 | Agents S2 | Low-level HM/image/launcher runtime with required software/proxy injection and the shared fail-closed gateway |
 | Desktop B2 | Explicit VS Code/Build123d/Handy/MAX/font mechanisms, Kitty and shared shell tools; caller pins and private policy stay outside core |
+| VPS B3 (local source) | Explicit-policy CLI/package, generated declarations and non-destructive state-copy fixtures; no fleet data, identities or automatic deployment |
 | Agents software API | Explicit caller packages/resources composition; no recipes or personal defaults |
 | Agents Radar recipe R2 | Opt-in caller-pinned Radar package with paired-Herdr patch requirement; no activation |
 | Agents installers D2/D3 + prompt/wiki/Claude/Pi-shell slices D4 | Opt-in explicit-source seed/link helpers and explicit-policy session/wrapper mechanisms; no personal payloads, permission defaults or recipes |
 
-P3 is not complete. Remaining application implementations, fleet CLI,
-deployment export and a VPS host/installer still require migration. Private integration is managed separately by
+P3 is not complete. Remaining application implementations, immutable CLI integration,
+deployment export and VPS host/installer acceptance still require migration. Private integration is managed separately by
 caller-owned adapters and a pinned core input.
 No history from the private repository was copied. Only separately reviewed code
 and synthetic tests belong here; ciphertext and device identities remain caller-owned.
@@ -75,6 +76,48 @@ ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## VPS CLI API (local B3)
+
+`lib.mkVpsCli { pkgs; sourcePolicy; coreRevision; coreNarHash; }` builds
+`vps-vless` with the caller's package set and an immutable tool/core pin.
+`sourcePolicy` is a caller-owned JSON path with exactly these fields:
+
+```json
+{
+  "factoryFiles": ["flake.nix", "hosts/generated.nix"],
+  "nativeFiles": ["host-data/addresses.nix"],
+  "nativeAddressFile": "host-data/addresses.nix",
+  "legacyAdminUser": "operator"
+}
+```
+
+The caller must enumerate every factory/native declaration dependency, including
+adapters and shared public data. Paths are relative to `--repo`, without traversal;
+the native address file must be in `nativeFiles`. No host name, recipient or
+personal checkout path is supplied by core. Generated hosts override native hosts.
+Renderer and Python helpers come from the tool, never executable Python from
+`--repo`. Policy, selected lock graph, selected declarations, ciphertext and tool
+sources participate in the receipt digest; unrelated reports/hosts do not.
+A changed source digest invalidates old checks, not installation-attempt markers.
+
+`lib.vpsCliSource` exposes tool-owned scripts for explicit source/fixture use.
+Source execution requires `VPS_CLI_POLICY`, `VPS_CORE_REV` and `VPS_CORE_NAR_HASH`;
+`VPS_XRAY_RENDERER` may select an absolute tool-owned renderer. The package binds
+all four values. `--repo`/`VPS_FLAKE` chooses an editable caller checkout, not the
+CLI implementation. Existing legacy state remains selected; new state uses
+`XDG_STATE_HOME/vps/HOST`, and `--state-dir ROOT` explicitly selects `ROOT/HOST`.
+
+`vps-state.py` defaults to read-only preview; only explicit `--copy` publishes a
+non-destructive copy, preserving bytes, receipts and known-hosts with schema-1
+marker provenance. It never moves ciphertext/identities, registers WARP or calls
+SSH. Conflicts, changed legacy files, missing copied artifacts and unsafe paths
+fail closed. Real-state maintenance requires separate operator authorization;
+fixtures are not runtime acceptance.
+
+`lib.mkVpsCliChecks { pkgs; }` / `checks.x86_64-linux.vps-cli` use only temporary
+synthetic fixtures, including real age/SOPS/OpenSSL roundtrips. These are offline
+safety tests, not a VPS build, deploy, installation or live service acceptance.
 
 ## Desktop and shell API (local B2)
 

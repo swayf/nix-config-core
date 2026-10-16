@@ -1,0 +1,6 @@
+{
+  "factoryFiles": ["flake.nix", "factory.nix", "hosts/generated.nix", "hosts/vps-source.nix"],
+  "nativeFiles": ["inventory.nix", "host-data/addresses.nix", "host-data/keys.nix"],
+  "nativeAddressFile": "host-data/addresses.nix",
+  "legacyAdminUser": "operator"
+}

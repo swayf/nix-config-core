@@ -91,6 +91,13 @@
         max = import ./modules/home-manager/desktop/max.nix;
         msWindowsFonts = import ./modules/home-manager/desktop/ms-windows-fonts.nix;
       };
+      lib.mkVpsCli = { pkgs, sourcePolicy, coreRevision, coreNarHash }:
+        pkgs.callPackage ./modules/nixos/vps-cli-package.nix {
+          inherit sourcePolicy coreRevision coreNarHash;
+        };
+      # Tool-owned source for explicit source/fixture use; never load code from --repo.
+      lib.vpsCliSource = ./scripts;
+      lib.mkVpsCliChecks = import ./tests/vps-cli.nix;
       lib.mkDesktopShellTools = import ./modules/home-manager/shell/tools.nix;
       lib.mkDesktopChecks = import ./tests/desktop.nix;
       lib.xrayMonitoringRules = import ./modules/nixos/xray-monitoring-rules.nix;
@@ -190,6 +197,7 @@
       };
 
       checks.${system} = {
+        vps-cli = self.lib.mkVpsCliChecks { inherit pkgs; };
         desktop-contracts = self.lib.mkDesktopChecks { inherit pkgs; };
         agents-notices = import ./tests/agents-notices.nix { inherit pkgs; };
         agents-radar-package = import ./tests/agents-radar-package.nix { inherit pkgs; };
