@@ -12,6 +12,40 @@ ALLOWLIST = {
     "README.md",
     "flake.nix",
     "flake.lock",
+    "modules/home-manager/desktop/build123d.nix",
+    "modules/home-manager/desktop/handy.nix",
+    "modules/home-manager/desktop/handy/dotool.sh",
+    "modules/home-manager/desktop/handy/focus-extension/extension.js",
+    "modules/home-manager/desktop/handy/focus-extension/metadata.json",
+    "modules/home-manager/desktop/handy/test-dotool.py",
+    "modules/home-manager/desktop/handy/test-focus-extension.mjs",
+    "modules/home-manager/desktop/kitty.nix",
+    "modules/home-manager/desktop/max.nix",
+    "modules/home-manager/desktop/max/clipboard.py",
+    "modules/home-manager/desktop/max/entrypoint.sh",
+    "modules/home-manager/desktop/max/focus-extension/extension.js",
+    "modules/home-manager/desktop/max/focus-extension/metadata.json",
+    "modules/home-manager/desktop/max/max-session.sh",
+    "modules/home-manager/desktop/max/notification-launch.py",
+    "modules/home-manager/desktop/max/notification-service.py",
+    "modules/home-manager/desktop/max/test_clipboard.py",
+    "modules/home-manager/desktop/max/test_focus_extension.mjs",
+    "modules/home-manager/desktop/max/test_weston.py",
+    "modules/home-manager/desktop/max/weston-xwayland-unframed.patch",
+    "modules/home-manager/desktop/max/weston.ini",
+    "modules/home-manager/desktop/ms-windows-fonts.nix",
+    "modules/home-manager/desktop/vscode.nix",
+    "modules/home-manager/desktop/vscode/check-extension.nix",
+    "modules/home-manager/desktop/vscode/session.nix",
+    "modules/home-manager/desktop/vscode/session.py",
+    "modules/home-manager/shell/aliases.nix",
+    "modules/home-manager/shell/colors.nix",
+    "modules/home-manager/shell/hm.nix",
+    "modules/home-manager/shell/scripts/_hm",
+    "modules/home-manager/shell/tools.nix",
+    "modules/home-manager/shell/zsh.nix",
+    "tests/test-vscode-session.py",
+    "tests/desktop.nix",
     "modules/nixos/vps-hardening.nix",
     "modules/nixos/xray-monitoring-rules.nix",
     "modules/nixos/xray-exporter-package.nix",
@@ -278,6 +312,8 @@ class BoundaryTests(unittest.TestCase):
                 # The immutable image uses a fixed, non-host container HOME.
                 if name.startswith("modules/home-manager/gui-container/"):
                     text = text.replace("/home/gui", "/container-home").replace("state/home/", "state/container-home/")
+                if name == "modules/home-manager/desktop/max.nix":
+                    text = text.replace("/home/max", "/container-home")
                 if name == "modules/home-manager/agents-container/image.nix":
                     text = text.replace('/home/${username}', '/container-home/${username}')
                 if name == "modules/home-manager/agents-container.nix":

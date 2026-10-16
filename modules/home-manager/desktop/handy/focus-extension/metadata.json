@@ -1,0 +1,7 @@
+{
+  "uuid": "handy-focus@home-manager",
+  "name": "Handy Terminal Paste",
+  "description": "Let Handy use Kitty's text paste shortcut while preserving Ctrl+V in other apps. No clipboard access.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "version": 1
+}

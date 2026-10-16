@@ -18,6 +18,7 @@ Reusable core under incremental migration. Reviewed groups:
 | Pi S1b | Opt-in HM Pi workspace mechanism and shared installer/helpers; resource selection and personal policy remain caller-owned |
 | Pi S1c | Generic extension source bundle, explicit wiki model-policy factory and caller-pinned native checks |
 | Agents S2 | Low-level HM/image/launcher runtime with required software/proxy injection and the shared fail-closed gateway |
+| Desktop B2 | Explicit VS Code/Build123d/Handy/MAX/font mechanisms, Kitty and shared shell tools; caller pins and private policy stay outside core |
 | Agents software API | Explicit caller packages/resources composition; no recipes or personal defaults |
 | Agents Radar recipe R2 | Opt-in caller-pinned Radar package with paired-Herdr patch requirement; no activation |
 | Agents installers D2/D3 + prompt/wiki/Claude/Pi-shell slices D4 | Opt-in explicit-source seed/link helpers and explicit-policy session/wrapper mechanisms; no personal payloads, permission defaults or recipes |
@@ -38,6 +39,86 @@ license does not relicense them. Package metadata and lockfile license fields
 are not a complete transitive license audit. Distribution of built packages or
 container images requires separate compliance with their dependency licenses.
 Caller-owned private resources are outside this grant.
+
+### Weston patch context notice
+
+The upstream-derived context in
+[`weston-xwayland-unframed.patch`](modules/home-manager/desktop/max/weston-xwayland-unframed.patch)
+comes from Weston's `xwayland/window-manager.c`. The local patch changes are
+contributor-owned; the upstream context retains the following file-specific
+notice, verified against
+[Weston 13.0.0](https://gitlab.freedesktop.org/wayland/weston/-/blob/13.0.0/xwayland/window-manager.c).
+This source notice is not a license audit of an Ubuntu/MAX image or its dependencies.
+Retain it when copying the upstream-derived patch context separately.
+
+```text
+Copyright © 2011 Intel Corporation
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice (including the
+next paragraph) shall be included in all copies or substantial
+portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## Desktop and shell API (local B2)
+
+`lib.desktopModules` contains module factories, applied to explicit policy before
+Home Manager applies its ordinary `config/lib/pkgs` arguments:
+
+```nix
+imports = [
+  (core.lib.desktopModules.vscode { inherit httpProxy; })
+  (core.lib.desktopModules.build123d {
+    inherit pyprojectInputs workspaceRoot viewerHash;
+  })
+  (core.lib.desktopModules.handy { inherit httpProxy xkbLayout; })
+  (core.lib.desktopModules.max { inherit version source containerfile; })
+  (core.lib.desktopModules.msWindowsFonts {
+    inherit defaultFiles defaultOutputHash iso version;
+  })
+  core.homeManagerModules.kitty
+  core.homeManagerModules.shell-hm
+  core.homeManagerModules.shell-zsh
+  core.homeManagerModules.shell-colors
+  core.homeManagerModules.shell-aliases
+];
+```
+
+`pyprojectInputs` contains the caller's `uv2nix`, `pyproject-nix` and
+`pyproject-build-systems` inputs. The workspace/lock, VSIX hash, MAX payload and
+Containerfile (including its base pin/timezone), proprietary font files/hash/ISO
+selection, proxy and keyboard policy remain caller-owned. No package set is
+imported implicitly. VS Code and Handy expect `desktop.environment`; VS Code's
+workspace-relative Nix options expression also uses `desktop.homeOutput`.
+
+`lib.mkDesktopShellTools { inherit pkgs lib environment nixodooFlake; }` returns
+clip, preview, pdf_opti, snap-clean, nxd and vless-qr packages without executing
+them. `shell-hm` declares `programs.hm.profile/flakePath`; the caller selects its
+profile. Personal aliases, SSH/VPS wrappers and nxd completion policy stay outside
+these modules. Importing modules does not run Podman, reset a live editor, inject
+input, configure root-owned uinput, or enable GNOME extensions automatically.
+
+`lib.mkDesktopChecks { inherit pkgs; }` and `checks.x86_64-linux.desktop-contracts`
+run synthetic HOME/clipboard/focus contracts. Native direct tests passed locally;
+selected caller-package builds and image/runtime acceptance remain unverified
+when their build closure is unavailable. A synthetic test or fixed-output reuse
+is not evidence of redistribution rights for fonts/MAX/extensions.
 
 ## Runtime module API
 

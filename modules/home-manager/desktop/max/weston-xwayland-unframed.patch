@@ -1,0 +1,17 @@
+--- a/xwayland/window-manager.c
++++ b/xwayland/window-manager.c
+@@ -2999,7 +2999,13 @@ weston_wm_window_configure(void *data)
+ 		window->configure_source = NULL;
+ 	}
+ 
+-	weston_wm_window_set_allow_commits(window, false);
++	/* Fullscreen override-redirect windows have no XWM frame. The shell can
++	 * still send them a configure, but _XWAYLAND_ALLOW_COMMITS applies only
++	 * to the frame window. Leave unframed windows' commits unrestricted, as
++	 * weston_wm_window_schedule_repaint() already does for these windows.
++	 */
++	if (window->frame_id != XCB_WINDOW_NONE)
++		weston_wm_window_set_allow_commits(window, false);
+ 
+ 	weston_wm_window_get_child_position(window, &x, &y);
+ 	values[0] = x;

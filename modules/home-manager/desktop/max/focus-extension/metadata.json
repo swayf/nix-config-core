@@ -1,0 +1,7 @@
+{
+  "uuid": "max-clipboard-focus@home-manager",
+  "name": "MAX Clipboard Focus Gate",
+  "description": "Expose host window focus to the MAX clipboard bridge; no clipboard access.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "version": 1
+}

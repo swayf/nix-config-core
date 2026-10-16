@@ -83,6 +83,16 @@
       };
     in
     {
+      # Factories take explicit caller pins/policies; no private flake lookups.
+      lib.desktopModules = {
+        vscode = import ./modules/home-manager/desktop/vscode.nix;
+        build123d = import ./modules/home-manager/desktop/build123d.nix;
+        handy = import ./modules/home-manager/desktop/handy.nix;
+        max = import ./modules/home-manager/desktop/max.nix;
+        msWindowsFonts = import ./modules/home-manager/desktop/ms-windows-fonts.nix;
+      };
+      lib.mkDesktopShellTools = import ./modules/home-manager/shell/tools.nix;
+      lib.mkDesktopChecks = import ./tests/desktop.nix;
       lib.xrayMonitoringRules = import ./modules/nixos/xray-monitoring-rules.nix;
       lib.mkAgentsSoftware = import ./modules/home-manager/agents-container/software.nix;
       lib.mkAgentsPackages = import ./modules/home-manager/agents-container/packages.nix;
@@ -141,6 +151,11 @@
         module = self.nixosModules.wsl;
       });
       homeManagerModules = {
+        kitty = ./modules/home-manager/desktop/kitty.nix;
+        shell-hm = ./modules/home-manager/shell/hm.nix;
+        shell-zsh = ./modules/home-manager/shell/zsh.nix;
+        shell-colors = ./modules/home-manager/shell/colors.nix;
+        shell-aliases = ./modules/home-manager/shell/aliases.nix;
         agents-container = ./modules/home-manager/agents-container.nix;
         pi = ./modules/home-manager/pi.nix;
         mihomo = ./modules/home-manager/mihomo.nix;
@@ -175,6 +190,7 @@
       };
 
       checks.${system} = {
+        desktop-contracts = self.lib.mkDesktopChecks { inherit pkgs; };
         agents-notices = import ./tests/agents-notices.nix { inherit pkgs; };
         agents-radar-package = import ./tests/agents-radar-package.nix { inherit pkgs; };
         agents-software = (import ./tests/agents-software.nix { inherit pkgs; }).check;

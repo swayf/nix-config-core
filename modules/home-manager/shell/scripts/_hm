@@ -1,0 +1,130 @@
+#compdef hm
+
+# Completion for the `hm` script in ../hm.nix, installed through
+# programs.zsh.siteFunctions (the zsh module puts every profile's
+# share/zsh/site-functions on fpath at order 520, ahead of compinit).
+#
+# Kept as a file rather than a Nix string for one reason: every ${...} below
+# would otherwise have to be written ''${...}, and there are two dozen of them.
+#
+# Neither helper runs `hm`, `nix` or `git` -- marks are a directory listing and
+# generations are the profile's symlinks, so completing costs two globs.
+
+# $HM_MARKS and its default are duplicated from ../hm.nix; they have to
+# agree, so change both together.
+_hm_marks_dir() {
+  print -r -- "${HM_MARKS:-${XDG_STATE_HOME:-$HOME/.local/state}/hm-marks}"
+}
+
+# Same probe order as Home Manager's setHomeManagerPathVariables: the XDG
+# location wins where it exists, the pre-Nix-2.14 per-user directory is the
+# fallback.
+_hm_profile_dir() {
+  local xdg=${XDG_STATE_HOME:-$HOME/.local/state}/nix/profiles
+  if [[ -d $xdg ]]; then
+    print -r -- $xdg
+  else
+    print -r -- ${NIX_STATE_DIR:-/nix/var/nix}/profiles/per-user/$USER
+  fi
+}
+
+_hm_marks() {
+  local dir=$(_hm_marks_dir)
+  local -a marks
+  marks=(${dir}/*(N:t))
+  (( $#marks )) && _describe -t marks 'метка' marks
+}
+
+_hm_generations() {
+  local dir=$(_hm_profile_dir)
+  local -a gens
+  local link id rev cur
+
+  cur=${$(readlink $dir/home-manager 2>/dev/null)#home-manager-}
+  cur=${cur%-link}
+
+  # (NOn) -- numeric-ish reverse sort by name, so the newest generations are
+  # offered first. Ten generations or a hundred, this stays one glob.
+  for link in $dir/home-manager-*-link(NOn); do
+    id=${${link:t}#home-manager-}
+    id=${id%-link}
+
+    # Tail of the store path name: the rev stamped in by flake.nix. Empty on
+    # generations built before that was added -- hence the fallback text.
+    rev=${${link:A:t}#*-home-manager-generation}
+    rev=${rev#-}
+
+    if [[ $id == $cur ]]; then
+      gens+=("${id}:${rev:-поколение} (текущее)")
+    else
+      gens+=("${id}:${rev:-поколение}")
+    fi
+  done
+
+  (( $#gens )) && _describe -t generations 'поколение' gens
+}
+
+_hm() {
+  local -a cmds=(
+    'status:git add -A и показать рабочее дерево'
+    'commit:закоммитить всё, сообщение становится и git-тегом'
+    'build:собрать конфигурацию без активации'
+    'switch:активировать, первый аргумент — метка'
+    'update:git pull --ff-only и активировать конфигурацию'
+    'flake-update:обновить входы флейка и переключиться'
+    'generations:поколения с метками и тегами'
+    'mark:пометить поколение и защитить его от GC'
+    'unmark:снять метку'
+    'rollback:вернуться на поколение или метку'
+    'diff:показать git-изменения относительно HEAD'
+    'diff-closures:сравнить замыкания поколений'
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe -t commands 'hm' cmds
+    return
+  fi
+
+  case ${words[2]} in
+    unmark)
+      (( CURRENT == 3 )) && _hm_marks
+      ;;
+    rollback|diff-closures)
+      # Both accept either, and both groups are shown at once.
+      if (( CURRENT == 3 )); then
+        _hm_marks
+        _hm_generations
+      fi
+      ;;
+    mark)
+      # hm mark [-f] <новое имя> [id] -- the name is new, so only the id
+      # position has anything to offer. -f shifts that position by one.
+      local -i idpos=4
+      [[ ${words[3]} == (-f|--force) ]] && idpos=5
+      (( CURRENT == idpos )) && _hm_generations
+      ;;
+    commit)
+      # -t takes a new tag name; everything else is the commit message, which
+      # is also where the tag name comes from when -t is absent.
+      [[ ${words[CURRENT-1]} == (-t|--tag) ]] && return
+      if [[ ${words[CURRENT]} == -* ]]; then
+        local -a opts=(
+          '-t:взять имя тега отсюда, а не из сообщения'
+          '--tag:взять имя тега отсюда, а не из сообщения'
+          '-n:не вешать тег'
+          '--no-tag:не вешать тег'
+        )
+        _describe -t options 'опция' opts
+      fi
+      ;;
+    switch|update)
+      # The first word is a new mark name, the rest are home-manager flags.
+      (( CURRENT > 3 )) && _default
+      ;;
+    *)
+      _default
+      ;;
+  esac
+}
+
+_hm "$@"
