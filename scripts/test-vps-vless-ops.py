@@ -60,6 +60,8 @@ class OperationsTests(unittest.TestCase):
         self.encrypted = []
         self.output = io.StringIO()
         self.addCleanup(mock.patch.stopall)
+        mock.patch.object(V, "source_ref", side_effect=lambda repo, output:
+                          contextlib.nullcontext("path:/source-only#" + output)).start()
         mock.patch.object(O.Host, "decrypt", side_effect=self.decrypt).start()
         mock.patch.object(O.Host, "encrypt", side_effect=self.encrypt).start()
         mock.patch.object(V, "evaluate", side_effect=self.evaluate).start()
@@ -420,6 +422,8 @@ class OperationsTests(unittest.TestCase):
         validate.assert_called_once()
         self.assertEqual(self.run.call_count, 1)
         self.assertEqual(self.run.call_args.args[0][1], "build")
+        self.assertEqual(self.run.call_args.args[0][2],
+                         "path:/source-only#nixosConfigurations.fixture.config.system.build.toplevel")
         self.remote.assert_not_called()
 
     def test_apply_build_failure_and_stale_sources_prevent_ssh(self):

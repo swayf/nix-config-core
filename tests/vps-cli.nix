@@ -14,6 +14,7 @@ let
       ../scripts/vps-policy.py
       ../scripts/deployment-lib.py
       ../scripts/test-vps.py
+      ../scripts/test-vps-source.py
       ../scripts/test-vps-vless-ops.py
       ../scripts/test-vps-warp.py
       ../scripts/vps-test-inputs.py
@@ -23,7 +24,7 @@ let
     ];
   };
 in pkgs.runCommand "vps-cli-safety-tests" {
-  nativeBuildInputs = [ pkgs.python3 pkgs.openssh pkgs.sops pkgs.age pkgs.openssl ];
+  nativeBuildInputs = [ pkgs.python3 pkgs.gitMinimal pkgs.openssh pkgs.sops pkgs.age pkgs.openssl ];
 } ''
   export PYTHONDONTWRITEBYTECODE=1
   export VPS_CORE_REV=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
@@ -33,6 +34,7 @@ in pkgs.runCommand "vps-cli-safety-tests" {
   export XDG_STATE_HOME="$TMPDIR/state"
   python3 ${source}/scripts/test-vps.py > safety.log 2>&1 || { tail -60 safety.log; exit 1; }
   python3 ${source}/scripts/test-vps-vless-ops.py
+  python3 ${source}/scripts/test-vps-source.py
   python3 ${source}/scripts/test-vps-warp.py
   python3 ${source}/tests/test-vps-cli-boundary.py
   touch $out

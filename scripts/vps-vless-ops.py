@@ -423,8 +423,9 @@ def validate_runtime(v, host):
 def apply(v, args, host):
     before = fingerprint(v, host)
     print("Building and validating locally; VPS unchanged.", flush=True)
-    built = v.run(["nix", "build", v.ref(host.repo, host.name) + ".system.build.toplevel",
-                   "--no-link", "--print-out-paths"], timeout=3600).decode().strip()
+    with v.ref(host.repo, host.name) as configuration:
+        built = v.run(["nix", "build", configuration + ".system.build.toplevel",
+                       "--no-link", "--print-out-paths"], timeout=3600).decode().strip()
     if not re.fullmatch(r"/nix/store/[a-z0-9]{32}-[^/\s]+", built):
         raise v.Error("Unexpected system build output")
     validate_runtime(v, host)

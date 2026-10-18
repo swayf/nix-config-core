@@ -648,6 +648,19 @@ def source_digest(repo, name):
 
 
 def state_path(repo, name, override=None, create=False):
+    if override is not None:
+        # source_ref knows only legacy and XDG state. Refuse other in-checkout
+        # roots before reading/creating state or reaching any Nix consumer.
+        # Normalize lexically, without traversing a private state directory.
+        checkout = Path(os.path.abspath(repo.expanduser()))
+        root = Path(os.path.abspath(override.expanduser()))
+        known = {checkout / "hosts/generated"}
+        xdg = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "vps"
+        if xdg.is_absolute():
+            known.add(Path(os.path.abspath(xdg)))
+        if (root / name).is_relative_to(checkout) and root not in known:
+            raise Error("In-checkout --state-dir is unsupported outside legacy/XDG layouts; "
+                        "use a workflow artifact root outside the checkout")
     helper = load(SOURCE / "vps-state.py", "vps_state")
     try:
         state = helper.select(repo, name, override)
@@ -996,12 +1009,105 @@ def provision(args, repo, state, host):
         print("Telegram disabled; to enable later, add a SOPS bot_token and set machine.json chatId.")
 
 
+def copy_source_file(repo, relative, target):
+    # Open every component without following links, including during a concurrent
+    # replacement. Never dereference a checkout symlink into external state.
+    with contextlib.ExitStack() as stack:
+        fd = os.open(repo, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        stack.callback(os.close, fd)
+        for part in relative.parts[:-1]:
+            fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            stack.callback(os.close, fd)
+        fd = os.open(relative.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        source = stack.enter_context(os.fdopen(fd, "rb"))
+        mode = os.fstat(source.fileno()).st_mode
+        if not stat.S_ISREG(mode):
+            raise Error("Non-regular VPS source input refused")
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("xb") as output:
+            shutil.copyfileobj(source, output)
+        destination.chmod(0o755 if mode & 0o111 else 0o644)
+
+
+@contextlib.contextmanager
+def source_ref(repo, output):
+    """Stage source before Nix sees any path; never ingest the live checkout.
+
+    Git-selected working-tree files are trusted source (not arbitrary untracked
+    files). Generated declarations/ciphertext are the only untracked exception.
+    Non-Git exports, symlinks, submodules and conflicted index entries fail closed.
+    """
+    repo = Path(repo).resolve()
+    root = os.fsdecode(run(["git", "-C", repo, "rev-parse", "--show-toplevel"])).strip()
+    if Path(root) != repo:
+        raise Error("VPS source requires the Git checkout root; no path-flake fallback")
+    entries = run(["git", "-C", repo, "ls-files", "--stage", "-z"]).split(b"\0")
+    selected = set()
+    generated = Path("hosts/generated")
+    xdg = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "vps"
+    if not xdg.is_absolute():
+        raise Error("XDG_STATE_HOME must be absolute")
+    # Match vps-state.py:safe_path's lexical normalization without traversing
+    # state directories. Equivalent paths containing '..' must exclude state too.
+    xdg = Path(os.path.abspath(xdg))
+    for entry in filter(None, entries):
+        metadata, filename = entry.split(b"\t", 1)
+        mode, _oid, stage = metadata.split()
+        relative = Path(os.fsdecode(filename))
+        if relative.is_absolute() or any(p in ("..", ".git", ".vps.lock", "__pycache__") for p in relative.parts):
+            raise Error("Unsafe VPS source path refused")
+        # Exclude even force-added legacy/XDG state. Generated inputs are added
+        # below by an exact allowlist, independent of Git ignore/staging status.
+        if stage != b"0":
+            raise Error("Conflicted VPS source input refused")
+        if generated in relative.parents or (repo / relative).is_relative_to(xdg):
+            continue
+        if mode not in (b"100644", b"100755"):
+            raise Error("Symlink or submodule VPS source input refused")
+        if (repo / relative).exists() or (repo / relative).is_symlink():
+            selected.add(relative)
+    directory = repo / generated
+    try:
+        if directory.is_symlink() or (repo / "hosts").is_symlink():
+            raise Error("Symlinked generated VPS source refused")
+        if directory.exists():
+            registry = directory / "inventory.json"
+            if registry.exists() or registry.is_symlink():
+                selected.add(generated / registry.name)
+            plan_files = (*HOST_CONFIG_FILES, "secrets.yaml", "monitoring.yaml",
+                          "plan.json", "credentials.json", "checked.json", "install-attempt.json", "verified.json")
+            for host in directory.iterdir():
+                if host.is_symlink():
+                    raise Error("Symlinked generated VPS source refused")
+                if not host.is_dir():
+                    continue
+                names = {p.name for p in host.iterdir()}
+                if names.intersection(plan_files) and not registry.is_file():
+                    raise Error("Missing generated VPS inventory; restore the registry")
+                for name in (*HOST_CONFIG_FILES, "secrets.yaml", "monitoring.yaml"):
+                    if name in names:
+                        selected.add(generated / host.name / name)
+        with tempfile.TemporaryDirectory(prefix="vps-source-") as temporary:
+            target = Path(temporary)
+            for relative in sorted(selected):
+                copy_source_file(repo, relative, target)
+            if not (target / "flake.nix").is_file() or not (target / "flake.lock").is_file():
+                raise Error("VPS source requires Git-selected flake.nix and flake.lock")
+            yield f"path:{target}#{output}"
+    except OSError:
+        raise Error("Missing/unsafe VPS source input; no live checkout fallback") from None
+
+
+@contextlib.contextmanager
 def ref(repo, name):
-    return f"path:{repo}#nixosConfigurations.{name}.config"
+    with source_ref(repo, f"nixosConfigurations.{validate_name(name)}.config") as value:
+        yield value
 
 
 def evaluate(repo, name, attribute, raw=False):
-    value = run(["nix", "eval", "--raw" if raw else "--json", ref(repo, name) + "." + attribute], timeout=300).decode().strip()
+    with ref(repo, name) as configuration:
+        value = run(["nix", "eval", "--raw" if raw else "--json", configuration + "." + attribute], timeout=300).decode().strip()
     return value if raw else json.loads(value)
 
 
@@ -1029,8 +1135,9 @@ def check(args, repo, state, host):
     credentials = read_json(state / "credentials.json")
     bootstrap_check(credentials, repo)
     before = source_digest(repo, args.name)
-    built = run(["nix", "build", ref(repo, args.name) + ".system.build.toplevel",
-                 ref(repo, args.name) + ".system.build.diskoScript", "--no-link", "--print-out-paths"], timeout=3600).decode().splitlines()
+    with ref(repo, args.name) as configuration:
+        built = run(["nix", "build", configuration + ".system.build.toplevel",
+                     configuration + ".system.build.diskoScript", "--no-link", "--print-out-paths"], timeout=3600).decode().splitlines()
     system = evaluate(repo, args.name, "system.build.toplevel.outPath", raw=True)
     disko = evaluate(repo, args.name, "system.build.diskoScript.outPath", raw=True)
     if len(built) != 2 or set(built) != {system, disko} or any(not p.startswith("/nix/store/") for p in built):
@@ -1040,8 +1147,9 @@ def check(args, repo, state, host):
     if machine["disk"] != plan_data["identity"]["disk"] or machine["firmware"] != plan_data["identity"]["firmware"]:
         raise Error("Generated boot/disk parameters differ from the reviewed plan; create a new inventory/plan")
     actual_disk = evaluate(repo, args.name, "disko.devices.disk.main.device", raw=True)
-    disk_names = json.loads(run(["nix", "eval", "--json", "--apply", "builtins.attrNames",
-                               ref(repo, args.name) + ".disko.devices.disk"]).decode())
+    with ref(repo, args.name) as configuration:
+        disk_names = json.loads(run(["nix", "eval", "--json", "--apply", "builtins.attrNames",
+                                   configuration + ".disko.devices.disk"]).decode())
     if actual_disk != machine["disk"]["name"] or disk_names != ["main"]:
         raise Error("Disko targets differ from the single confirmed disk")
     user = legacy_admin(machine)
@@ -1075,7 +1183,8 @@ def check(args, repo, state, host):
         write_json(path, runtime)
         run([package + "/bin/xray", "run", "-test", "-config", path], timeout=20)
     if args.vm_test:
-        run(["nix", "run", ANYWHERE, "--", "--flake", f"path:{repo}#{args.name}", "--vm-test"], timeout=3600)
+        with source_ref(repo, args.name) as flake:
+            run(["nix", "run", ANYWHERE, "--", "--flake", flake, "--vm-test"], timeout=3600)
     if source_digest(repo, args.name) != before:
         raise Error("Source changed during check; repeat after reviewing the changes")
     write_json(state / "checked.json", {"source_digest": before, "system": system, "disko": disko, "vm_test": args.vm_test,
@@ -1364,8 +1473,9 @@ def prepare_installer_tools(c, repo, *, password=None, installer=None):
         raise Error("Installer tools require root SSH with the saved installation key; inspect recovery")
     tools = os.environ.get("VPS_INSTALLER_TOOLS")
     if not tools:
-        tools = run(["nix", "build", f"path:{repo}#vps-installer-tools", "--no-link", "--print-out-paths"],
-                    timeout=600).decode().strip()
+        with source_ref(repo, "vps-installer-tools") as flake:
+            tools = run(["nix", "build", flake, "--no-link", "--print-out-paths"],
+                        timeout=600).decode().strip()
     if not re.fullmatch(r"/nix/store/[0-9a-z]{32}-[A-Za-z0-9+._?=-]+", tools) or not Path(tools).is_dir():
         raise Error("Installer tools are not an available local Nix store path; check the vps runtime")
     # Unlike nixos-anywhere, this transfer uses the same strict, pinned SSH
@@ -1714,7 +1824,7 @@ def parser():
     p.add_argument("--repo", type=Path, default=Path(os.environ.get("VPS_FLAKE", os.getcwd())),
                    help="flake checkout; VPS_FLAKE if set, otherwise current directory")
     p.add_argument("--state-dir", type=Path, default=None,
-                   help="override workflow artifact root (default: XDG_STATE_HOME/vps; existing legacy state stays in REPO/hosts/generated until explicit copy; HOST is appended)")
+                   help="override workflow artifact root (default: XDG_STATE_HOME/vps; existing legacy state stays in REPO/hosts/generated until explicit copy; HOST is appended); custom roots must be outside the checkout")
     p.add_argument("--debug", action="store_true",
                    help="show redacted exception locations; never print tool output, arguments or local variables")
     sub = p.add_subparsers(dest="command", required=True)

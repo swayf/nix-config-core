@@ -1,4 +1,4 @@
-{ lib, callPackage, writeShellApplication, python3, nix, openssh, sshpass, openssl, sops, age, ssh-to-age, wgcf, curl, rendererSource ? ./xray-render.py, sourcePolicy, coreRevision, coreNarHash }:
+{ lib, callPackage, writeShellApplication, python3, nix, git, openssh, sshpass, openssl, sops, age, ssh-to-age, wgcf, curl, rendererSource ? ./xray-render.py, sourcePolicy, coreRevision, coreNarHash }:
 let
   installerTools = callPackage ./vps-installer-tools.nix { };
   # Ubuntu has no Nix loader/store: ship a pure-Go, static Linux binary over SSH.
@@ -15,7 +15,7 @@ let
   };
 in writeShellApplication {
   name = "vps-vless";
-  runtimeInputs = [ python3 nix openssh sshpass openssl sops age ssh-to-age portableWgcf curl ];
+  runtimeInputs = [ python3 nix git openssh sshpass openssl sops age ssh-to-age portableWgcf curl ];
   text = ''
     export VPS_WGCF_BINARY="${portableWgcf}/bin/wgcf"
     export VPS_INSTALLER_TOOLS="${installerTools}"

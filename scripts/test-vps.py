@@ -1686,6 +1686,11 @@ class InstallerToolsTests(unittest.TestCase):
         self.c = V.connection("203.0.113.5", "root", 22, "/key with spaces", "/known with spaces")
         self.tools = "/nix/store/" + "a" * 32 + "-vps-installer-tools"
         self.repo = Path("/checkout")
+        # Source staging has its own real-Git/synthetic Nix boundary tests.
+        staging = patch.object(V, "source_ref", side_effect=lambda repo, output:
+                               contextlib.nullcontext("path:/source-only#" + output))
+        staging.start()
+        self.addCleanup(staging.stop)
 
     def test_source_environment_is_readonly_without_python_or_package_changes(self):
         with patch.object(V, "remote_run", return_value=b"source\n") as remote, \
@@ -1750,7 +1755,7 @@ class InstallerToolsTests(unittest.TestCase):
             result = V.prepare_installer_tools(c, self.repo)
         self.assertEqual(result["installer_tools"], self.tools)
         self.assertEqual(run.call_args_list[0].args[0],
-                         ["nix", "build", "path:/checkout#vps-installer-tools", "--no-link", "--print-out-paths"])
+                         ["nix", "build", "path:/source-only#vps-installer-tools", "--no-link", "--print-out-paths"])
         self.assertEqual(shlex.split(run.call_args.kwargs["env"]["NIX_SSHOPTS"])[:2], ["-p", "2222"])
 
     def test_unidentified_environment_and_missing_key_never_copy_tools(self):
@@ -2076,6 +2081,10 @@ class BootstrapTests(unittest.TestCase):
 
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
+        staging = patch.object(V, "source_ref", side_effect=lambda repo, output:
+                               contextlib.nullcontext("path:/source-only#" + output))
+        staging.start()
+        self.addCleanup(staging.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name) / "repo"
@@ -2838,9 +2847,15 @@ class WorkflowTests(unittest.TestCase):
         def run(command, *_args, **_kwargs):
             calls.append(command)
             if command[:2] == ["nix", "build"]:
+                self.assertTrue(all(arg.startswith("path:/source-only#nixosConfigurations.vps-test.config.")
+                                    for arg in command[2:4]))
                 return b"/nix/store/disko\n/nix/store/system\n"  # intentionally reversed
             if command[:2] == ["nix", "eval"]:
+                self.assertTrue(command[-1].startswith("path:/source-only#"))
                 return b'["main"]'
+            if command[:2] == ["nix", "run"]:
+                self.assertIn("path:/source-only#vps-test", command)
+                return b""
             self.assertEqual(command[0], "/nix/store/xray/bin/xray")
             path = Path(command[-1]); paths.append(path)
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
@@ -2850,7 +2865,8 @@ class WorkflowTests(unittest.TestCase):
              patch.object(V, "run", side_effect=run), patch.object(V, "evaluate", side_effect=evaluate), \
              patch.object(V, "payloads", return_value=[generator, {"bot_token": "test"}]), \
              patch.object(V, "load", return_value=renderer), contextlib.redirect_stdout(io.StringIO()):
-            V.check(argparse.Namespace(name="vps-test", vm_test=False), self.repo, self.state, self.host)
+            V.check(argparse.Namespace(name="vps-test", vm_test=True), self.repo, self.state, self.host)
+        self.assertTrue(any(cmd[:2] == ["nix", "run"] for cmd in calls))
         bootstrap.assert_called_once_with(V.read_json(self.state / "credentials.json"), self.repo)
         checked = V.read_json(self.state / "checked.json")
         self.assertEqual(checked["system"], "/nix/store/system")
