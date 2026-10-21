@@ -79,6 +79,7 @@ in
             commit [-t TAG] [msg]  commit core, then HM with the same message; tag HM (-n: none)
             push                   push core, then HM, including annotated tags (--follow-tags)
             build                  build the configuration without activating it
+            news [args]            show Home Manager news for the selected configuration
             switch [MARK] [args]   activate, marking the result if MARK is given
             update [MARK] [args]   git pull --ff-only, then switch
             flake-update           update the flake inputs, commit them, switch
@@ -300,6 +301,10 @@ in
             build)
               prepare_core
               home-manager build --flake "$flake#$profile" "''${core_args[@]}"
+              ;;
+            news)
+              prepare_core
+              home-manager news --flake "$flake#$profile" "''${core_args[@]}" "$@"
               ;;
             switch)
               # A leading word that is not a flag is a mark for the generation

@@ -161,7 +161,7 @@ these modules.
 
 `HM_CORE_FLAKE` включает локальную работу с core в `hm`: это путь к отдельному
 корню Git checkout с `flake.nix`, без личного default внутри core. `build`,
-`switch` и будущая сборка в `diff-closures` передают локальный Git input через
+`news`, `switch` и будущая сборка в `diff-closures` передают локальный Git input через
 `--override-input core ... --no-write-lock-file`; публичный lock не переписывается.
 Используются и незакоммиченные изменения tracked-файлов; новые файлы сначала
 нужно добавить в Git. Пустая переменная сохраняет прежний режим публичного pin.
@@ -175,7 +175,12 @@ these modules.
 Отправляются также аннотированные теги, достижимые из отправляемых коммитов.
 Ошибка core останавливает отправку HM; ошибка HM не отменяет уже отправленный core.
 `flake-update` обновляет публичные inputs, затем switch использует локальный core;
-`update` делает pull только HM. Для первого применения нового `hm` старым
+`update` делает pull только HM. `hm news [args]` вызывает `home-manager news`
+для выбранных `HM_FLAKE`/`HM_PROFILE`, передавая дополнительные аргументы без изменений.
+Это новости выбранной закреплённой конфигурации, а не проверка свежего upstream;
+команда не запускает switch и не обновляет lock, но Home Manager может отметить
+новости прочитанными.
+Для первого применения нового `hm` старым
 помощником передайте override явно в `hm switch`.
 
 Importing modules does not run Podman, reset a live editor, inject
