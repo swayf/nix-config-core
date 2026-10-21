@@ -347,7 +347,9 @@ class SourceBoundaryTests(unittest.TestCase):
             host = argparse.Namespace(repo=self.repo, name="fixture")
             self.assertEqual(O.apply(V, argparse.Namespace(check=True), host), 0)
             connection.assert_not_called()
-            with patch.dict(os.environ, {}, clear=True), patch.object(V, "remote_run", return_value=b"installer\n"), \
+            # Force the installer fallback without losing Git from the Nix build PATH.
+            with patch.dict(os.environ, {"PATH": os.environ["PATH"]}, clear=True), \
+                    patch.object(V, "remote_run", return_value=b"installer\n"), \
                     patch.object(V.Path, "is_dir", autospec=True,
                                  side_effect=lambda path: str(path) == tools or real_is_dir(path)):
                 c = V.connection("203.0.113.5", "root", 22, "/synthetic-key", "/synthetic-known")
