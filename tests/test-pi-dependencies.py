@@ -52,7 +52,7 @@ class PiDependencies(unittest.TestCase):
 
     def test_no_private_policy_or_reviewer_patch_in_slice(self):
         for path in PI.rglob("*"):
-            if not path.is_file():
+            if not path.is_file() or "__pycache__" in path.parts:
                 continue
             with self.subTest(path=path):
                 text = path.read_text()

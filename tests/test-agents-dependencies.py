@@ -24,8 +24,9 @@ class AgentsDependencies(unittest.TestCase):
             self.assertTrue(all((HM / name).parent.joinpath(p).is_file() for p in expected))
 
     def test_no_private_defaults_or_arguments(self):
-        for p in [HM / "agents-container.nix", *sorted((HM / "agents-container").glob("*"))]:
-            if p.name.startswith("test-"):
+        # Include nested package recipes and patches, not just top-level helpers.
+        for p in [HM / "agents-container.nix", *sorted((HM / "agents-container").rglob("*"))]:
+            if not p.is_file() or p.name.startswith("test-") or "__pycache__" in p.parts:
                 continue
             text = p.read_text()
             for token in ("inputs", "hasSecret", "secretFile", "config.platform", "config.sops",

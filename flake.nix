@@ -9,6 +9,66 @@
       pkgs = nixpkgs2605.legacyPackages.${system};
       renderer = pkgs.callPackage ./modules/nixos/xray-render-package.nix { };
       exporter = pkgs.callPackage ./modules/nixos/xray-exporter-package.nix { };
+      # Guards depend on the domains they inspect, not the entire Git tree.
+      guardSource = files: pkgs.lib.fileset.toSource {
+        root = ./.;
+        fileset = pkgs.lib.fileset.unions files;
+      };
+      guardSources = {
+        agents-software = guardSource [
+          ./tests/test-agents-software-dependencies.py
+          ./modules/home-manager/agents-container/software.nix
+          ./flake.nix
+        ];
+        agents-installers = guardSource [
+          ./tests/test-agents-installers-dependencies.py
+          ./tests/agents-installers.nix
+          ./modules/home-manager/agents-container
+          ./modules/home-manager/agents-container.nix
+          ./flake.nix
+        ];
+        agents = guardSource [
+          ./tests/test-agents-dependencies.py
+          ./modules/home-manager/agents-container
+          ./modules/home-manager/agents-container.nix
+          ./modules/home-manager/container-gateway.nix
+        ];
+        pi-extension = guardSource [
+          ./tests/test-pi-extension-dependencies.py
+          ./tests/pi-extensions.nix
+          ./tests/pi-extensions-native.nix
+          ./modules/programs/pi/extensions
+          ./modules/programs/pi/extensions.nix
+          ./modules/programs/pi/wiki-ask.nix
+          ./modules/home-manager/pi.nix
+          ./flake.nix
+        ];
+        pi = guardSource [
+          ./tests/test-pi-dependencies.py
+          ./modules/programs/pi
+          ./modules/home-manager/pi.nix
+          ./flake.nix
+        ];
+        gui-proxy = guardSource [
+          ./tests/test-gui-proxy-dependencies.py
+          ./modules/home-manager/gui-container.nix
+          ./modules/home-manager/gui-container
+          ./modules/home-manager/mihomo.nix
+          ./modules/home-manager/container-gateway.nix
+          ./profiles/home-manager/wsl-gui-device.nix
+        ];
+        wsl = guardSource [
+          ./tests/test-wsl-dependencies.py
+          ./modules/nixos/wsl.nix
+        ];
+        home-profile = guardSource [
+          ./tests/test-home-dependencies.py
+          ./modules/home-manager
+          ./profiles/home-manager
+          ./modules/programs/pi
+          ./tests/fixtures
+        ];
+      };
       dependencySource = pkgs.lib.fileset.toSource {
         root = ./.;
         fileset = pkgs.lib.fileset.unions [
@@ -205,27 +265,27 @@
         agents-software-dependencies = pkgs.runCommand "agents-software-dependency-guards" {
           nativeBuildInputs = [ pkgs.python3 ];
         } ''
-          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-agents-software-dependencies.py
+          PYTHONDONTWRITEBYTECODE=1 python3 ${guardSources.agents-software}/tests/test-agents-software-dependencies.py
           touch $out
         '';
         agents-installers = import ./tests/agents-installers.nix { inherit pkgs; };
         agents-installers-dependencies = pkgs.runCommand "agents-installers-dependency-guards" {
-          nativeBuildInputs = [ pkgs.python3 pkgs.bash pkgs.coreutils ];
+          nativeBuildInputs = [ pkgs.python3 ];
         } ''
-          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-agents-installers-dependencies.py
+          PYTHONDONTWRITEBYTECODE=1 python3 ${guardSources.agents-installers}/tests/test-agents-installers-dependencies.py
           touch $out
         '';
         agents-helpers = import ./tests/agents-helpers.nix { inherit pkgs; };
         agents-dependencies = pkgs.runCommand "agents-dependency-guards" {
           nativeBuildInputs = [ pkgs.python3 ];
         } ''
-          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-agents-dependencies.py
+          PYTHONDONTWRITEBYTECODE=1 python3 ${guardSources.agents}/tests/test-agents-dependencies.py
           touch $out
         '';
         pi-extension-dependencies = pkgs.runCommand "pi-extension-dependency-guards" {
           nativeBuildInputs = [ pkgs.python3 ];
         } ''
-          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-pi-extension-dependencies.py
+          PYTHONDONTWRITEBYTECODE=1 python3 ${guardSources.pi-extension}/tests/test-pi-extension-dependencies.py
           touch $out
         '';
         pi-extensions = import ./tests/pi-extensions.nix { inherit pkgs; };
@@ -233,27 +293,27 @@
         pi-dependencies = pkgs.runCommand "pi-dependency-guards" {
           nativeBuildInputs = [ pkgs.python3 ];
         } ''
-          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-pi-dependencies.py
+          PYTHONDONTWRITEBYTECODE=1 python3 ${guardSources.pi}/tests/test-pi-dependencies.py
           touch $out
         '';
         pi-installers = import ./tests/pi-installers.nix { inherit pkgs; };
         gui-proxy-dependencies = pkgs.runCommand "gui-proxy-dependency-guards" {
           nativeBuildInputs = [ pkgs.python3 ];
         } ''
-          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-gui-proxy-dependencies.py
+          PYTHONDONTWRITEBYTECODE=1 python3 ${guardSources.gui-proxy}/tests/test-gui-proxy-dependencies.py
           touch $out
         '';
         gui-helpers = import ./tests/gui-helpers.nix { inherit pkgs; };
         wsl-dependencies = pkgs.runCommand "wsl-dependency-guards" {
           nativeBuildInputs = [ pkgs.python3 ];
         } ''
-          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-wsl-dependencies.py
+          PYTHONDONTWRITEBYTECODE=1 python3 ${guardSources.wsl}/tests/test-wsl-dependencies.py
           touch $out
         '';
         home-profile-dependencies = pkgs.runCommand "home-profile-dependency-guards" {
           nativeBuildInputs = [ pkgs.python3 ];
         } ''
-          PYTHONDONTWRITEBYTECODE=1 python3 ${self}/tests/test-home-dependencies.py
+          PYTHONDONTWRITEBYTECODE=1 python3 ${guardSources.home-profile}/tests/test-home-dependencies.py
           touch $out
         '';
         vps-base = import ./tests/vps-base.nix {

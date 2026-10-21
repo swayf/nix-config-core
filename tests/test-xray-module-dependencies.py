@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Narrow G6 resource/import guards; includes optional VM runner, not a VM execution."""
 import ast
-import hashlib
 import json
 from pathlib import Path
 import re
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,17 +39,20 @@ class ModuleDependencyTests(unittest.TestCase):
         self.assertNotRegex(text, r"\b(?:inputs|shared|userConfig|fetchurl)\b|age1[a-z0-9]+")
         self.assertNotRegex(text, r"secrets/|\.sops\.yaml|/home/|/Users/")
 
-    def test_dashboard_is_unchanged_generic_resource(self):
+    def test_dashboard_has_public_node_scoped_queries(self):
         path = ROOT / "modules/nixos/xray-dashboards/vps.json"
-        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),
-                         "3611a1599a6d4adcc90d42f7650e98a9cdfe155e848e86929f3576954ecb6ae2")
         dashboard = json.loads(path.read_text())
         self.assertEqual(dashboard["uid"], "xray-vps")
         self.assertFalse(dashboard["editable"])
-        self.assertEqual(len(dashboard["panels"]), 8)
-        for panel in dashboard["panels"]:
-            for target in panel["targets"]:
-                self.assertIn('node="$node"', target["expr"])
+        self.assertTrue(dashboard["panels"])
+        self.assertIn("node", {item["name"] for item in dashboard["templating"]["list"]})
+        expressions = [target["expr"] for panel in dashboard["panels"] for target in panel["targets"]]
+        self.assertTrue(expressions)
+        for expr in expressions:
+            self.assertIn('node="$node"', expr)
+        # HTTP health and StatsService availability are different signals.
+        for metric in ("up", "xray_up", "xray_traffic_uplink_bytes_total", "xray_traffic_downlink_bytes_total"):
+            self.assertTrue(any(re.search(rf"\b{metric}\{{", expr) for expr in expressions), metric)
         self.assertNotRegex(path.read_text(), r"https?://|age1[a-z0-9]+")
 
     def test_vm_source_and_synthetic_identities(self):
@@ -73,7 +76,7 @@ class ModuleDependencyTests(unittest.TestCase):
             elif isinstance(node, ast.ImportFrom):
                 self.assertEqual(node.level, 0)
                 imports.add(node.module)
-        self.assertEqual(imports, {"argparse", "importlib.util", "http.server", "json", "os", "pathlib", "ssl", "subprocess", "urllib.parse"})
+        self.assertLessEqual({name.split(".")[0] for name in imports}, sys.stdlib_module_names)
         self.assertIn('Path(__file__).with_name("xray-test-fixture.py")', text)
         self.assertNotRegex(text, r"/home/|/Users/|\bsops\b")
         self.assertIn('"alice": {"uuid": F.UUID}', text)

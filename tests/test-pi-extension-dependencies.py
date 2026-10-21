@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exact reviewed Pi extension edges and policy boundary, not a general scanner."""
+"""Pi public exports, import and policy boundaries, not a frozen file inventory."""
 from pathlib import Path
 import re
 import unittest
@@ -14,22 +14,18 @@ EXPORTS = {
     "wikiAsk": "wiki-ask", "contextHandoff": "context-handoff",
     "codexLimits": "codex-limits.ts", "clear": "clear.ts",
 }
-DIRECTORY_FILES = {
-    "lazy-capabilities": {"index.ts", "core.mjs"},
-    "context-handoff": {"index.ts", "core.mjs", "README.md"},
-    "wiki-ask": {"index.ts", "core.mjs", "core.test.mjs", "README.md", "SKILL.md"},
-}
 PEERS = {"@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"}
 
 
 class ExtensionDependencies(unittest.TestCase):
-    def test_exact_bundle_without_private_or_legacy_resources(self):
+    def test_public_exports_without_private_or_legacy_resources(self):
         exported = dict(re.findall(r"([A-Za-z]+) = \./extensions/([^;]+);", (PI / "extensions.nix").read_text()))
-        self.assertEqual(exported, EXPORTS)
-        expected = {name for name in EXPORTS.values() if name.endswith(".ts")}
-        expected |= {f"{directory}/{name}" for directory, names in DIRECTORY_FILES.items() for name in names}
-        actual = {p.relative_to(EXT).as_posix() for p in EXT.rglob("*") if p.is_file()}
-        self.assertEqual(actual, expected)
+        # Existing API remains available; additive exports/resources are allowed.
+        self.assertLessEqual(EXPORTS.items(), exported.items())
+        for name in exported.values():
+            target = EXT / name
+            self.assertTrue(target.exists(), target)
+            self.assertTrue(target.resolve().is_relative_to(EXT.resolve()), target)
         self.assertFalse(any(p.is_symlink() for p in EXT.rglob("*")))
         for path in EXT.rglob("*"):
             if not path.is_file():
@@ -62,7 +58,7 @@ class ExtensionDependencies(unittest.TestCase):
                 self.assertEqual(target.resolve().parent, path.parent.resolve())
                 relative.add(name)
             local_edges[path.relative_to(EXT).as_posix()] = relative
-        for directory in DIRECTORY_FILES:
+        for directory in (name for name in EXPORTS.values() if not name.endswith(".ts")):
             self.assertEqual(local_edges[f"{directory}/index.ts"], {"./core.mjs"})
             self.assertEqual(local_edges[f"{directory}/core.mjs"], set())
         self.assertEqual(local_edges["wiki-ask/core.test.mjs"], {"./core.mjs"})

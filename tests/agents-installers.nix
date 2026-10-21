@@ -4,8 +4,9 @@ let
   exports = (import ../flake.nix).outputs { self = {}; nixpkgs2605 = {}; };
   installers = exports.lib.agentsInstallers;
   source = pkgs.lib.fileset.toSource {
-    root = ../modules/home-manager/agents-container;
+    root = ../.;
     fileset = pkgs.lib.fileset.unions [
+      ./test-agents-installers-standalone.py
       installers.claudeProfile
       installers.herdrNavigation
       installers.herdrRadar
@@ -67,14 +68,6 @@ pkgs.runCommand "agents-installers-synthetic" {
   export HOME="$TMPDIR/home"
   mkdir -p "$HOME"
   export PYTHONDONTWRITEBYTECODE=1
-  python3 ${source}/test-install-herdr-navigation.py
-  python3 ${source}/test-install-herdr-radar.py
-  python3 ${source}/test-install-herdr-review-plugins.py
-  python3 ${source}/test-install-herdr-projects.py
-  python3 ${source}/test-install-pi-prompts.py
-  python3 ${source}/test-install-pi-shell.py
-  python3 ${source}/test-install-terminal-browser.py
-  python3 ${source}/test-wiki-init.py
-  python3 ${source}/test-claude-profile.py
+  python3 ${source}/tests/test-agents-installers-standalone.py
   touch "$out"
 ''

@@ -169,6 +169,11 @@ these modules.
 `git diff HEAD` без stage, с заголовками. `commit` сохраняет изменённые репозитории
 в том же порядке с одним сообщением, без push; теги ставятся только в HM.
 Два коммита не атомарны: ошибка HM не отменяет уже сохранённый core.
+`push` выполняет `git push --follow-tags` сначала в core, затем в HM, используя
+настройки push каждого репозитория; без `HM_CORE_FLAKE` отправляет только HM.
+Аргументы не принимает, index не меняет, commit и switch не выполняет.
+Отправляются также аннотированные теги, достижимые из отправляемых коммитов.
+Ошибка core останавливает отправку HM; ошибка HM не отменяет уже отправленный core.
 `flake-update` обновляет публичные inputs, затем switch использует локальный core;
 `update` делает pull только HM. Для первого применения нового `hm` старым
 помощником передайте override явно в `hm switch`.
@@ -1034,8 +1039,27 @@ production integration remain separate gates.
 ## Checks
 
 ```sh
-nix flake check --offline --no-write-lock-file --option substitute false path:.
+nix flake check --offline --no-write-lock-file --option substitute false .
 ```
+
+Текущий состав: 34 default checks; дорогая monitoring VM остаётся opt-in.
+`core-boundaries` сканирует новые production sources без полного списка файлов:
+сохраняются запреты private paths, key material, fleet outputs и private payloads.
+Это ограниченный guard, не полноценный secret/security audit. SHA256 текста recipe
+и dashboard не фиксируются; fetch/vendor integrity и контракты dashboard сохранены.
+
+`agents-installers` один раз запускает девять suites на временных копиях вне
+checkout, с изолированными HOME/PATH; Nix composition assertions остаются в runner.
+`agents-installers-dependencies` больше не повторяет поведенческий прогон.
+Восемь domain guards используют ограниченные filesets; общий boundary scan намеренно
+зависит от всего source tree. Подробные Pi suites сохраняют upgrade/override/error
+cases; агрегированный suite оставляет отдельные all-profile auth/settings проверки,
+model-presets, brainstorming, packet-reviewer и settings migrations.
+
+Команда выше проверяет Git flake: новые тесты нужно сначала включить в Git.
+`path:.` допустим для явной локальной проверки ещё не включённых файлов, но не
+доказывает полноту Git source. Результаты исторических запусков ниже не означают
+PASS текущего изменённого набора или наличие всех build inputs.
 
 The original 15 default checks passed offline after separate preparation of
 pinned cache outputs without changing inputs or hashes. G8 adds a sixteenth

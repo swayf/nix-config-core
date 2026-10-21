@@ -54,21 +54,12 @@ class WorkspaceInstallers(unittest.TestCase):
         for path, data in self.originals.items():
             self.assertEqual(path.read_bytes(), data)
 
-    def test_simple_links_repeat_upgrade_preserve_files_and_repair_dangling(self):
+    def test_simple_links_preserve_auth_and_settings_in_every_profile(self):
+        # Detailed per-installer suites own repeat/upgrade/local overrides and
+        # broken links. Keep the distinct all-profile auth/settings contract here.
         for name in ('bell', 'statusline', 'compact-prompts', 'compact-tools'):
             with self.subTest(installer=name):
-                local = self.profiles[1] / 'extensions' / (name + '.ts')
-                local.parent.mkdir(exist_ok=True)
-                local.write_text('local override\n')
-                dangling = self.profiles[2] / 'extensions' / (name + '.ts')
-                dangling.parent.mkdir(exist_ok=True)
-                dangling.symlink_to(self.root / 'missing')
-                for _ in range(2):
-                    self.install(name, self.extension)
-                    self.assertEqual(local.read_text(), 'local override\n')
-                    self.assertEqual(dangling.readlink(), self.extension)
-                    for profile in (self.profiles[0], self.profiles[3], self.profiles[4]):
-                        self.assertEqual((profile / 'extensions' / (name + '.ts')).readlink(), self.extension)
+                self.install(name, self.extension)
                 self.unchanged()
 
     def test_seed_is_writable_independent_and_existing_presets_are_kept(self):
@@ -95,37 +86,22 @@ class WorkspaceInstallers(unittest.TestCase):
             self.assertEqual((profile / 'skills/brainstorming').readlink(), self.package)
         self.unchanged()
 
-    def test_wiki_delivery_excludes_wiki_and_preserves_local_directory(self):
-        local = self.profiles[4] / 'extensions/wiki-ask'
-        local.mkdir(parents=True)
-        (local / 'index.ts').write_text('local\n')
+    def test_packet_reviewer_keeps_unknown_and_refreshes_managed_links(self):
+        # Context-handoff has its own detailed code-only/override/upgrade suite.
+        relative = 'agents/packet-reviewer.md'
+        target = self.profiles[2] / relative
+        target.parent.mkdir(exist_ok=True)
+        target.symlink_to(self.root / 'unknown-missing')
+        self.install('packet-reviewer', self.rubric)
+        self.assertEqual(target.readlink(), self.root / 'unknown-missing')
+        target.unlink()
+        target.symlink_to('/etc/agents/pi-agents/packet-reviewer.md')
         for _ in range(2):
-            self.install('wiki-ask', self.package)
-        self.assertFalse((self.profiles[3] / 'extensions/wiki-ask').exists())
-        self.assertEqual((local / 'index.ts').read_text(), 'local\n')
-        for profile in self.profiles[:3]:
-            self.assertEqual((profile / 'extensions/wiki-ask').readlink(), self.package)
+            self.install('packet-reviewer', self.rubric)
+            self.assertEqual(target.readlink(), self.rubric)
+        for profile in (self.profiles[0], self.profiles[1], self.profiles[3], self.profiles[4]):
+            self.assertFalse((profile / relative).exists())
         self.unchanged()
-
-    def test_code_only_links_keep_unknown_and_refresh_managed_links(self):
-        for name, source, relative, managed in (
-            ('packet-reviewer', self.rubric, 'agents/packet-reviewer.md', '/etc/agents/pi-agents/packet-reviewer.md'),
-            ('context-handoff', self.package, 'extensions/context-handoff', '/etc/agents/pi-extensions/context-handoff'),
-        ):
-            with self.subTest(installer=name):
-                target = self.profiles[2] / relative
-                target.parent.mkdir(exist_ok=True)
-                target.symlink_to(self.root / 'unknown-missing')
-                self.install(name, source)
-                self.assertEqual(target.readlink(), self.root / 'unknown-missing')
-                target.unlink()
-                target.symlink_to(managed)
-                for _ in range(2):
-                    self.install(name, source)
-                    self.assertEqual(target.readlink(), source)
-                for profile in (self.profiles[0], self.profiles[1], self.profiles[3], self.profiles[4]):
-                    self.assertFalse((profile / relative).exists())
-                self.unchanged()
 
     def test_lazy_exclusions_are_idempotent_and_other_settings_survive(self):
         for _ in range(2):

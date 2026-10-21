@@ -77,6 +77,7 @@ in
 
             status                 stage/show core, then HM (git add -A)
             commit [-t TAG] [msg]  commit core, then HM with the same message; tag HM (-n: none)
+            push                   push core, then HM, including annotated tags (--follow-tags)
             build                  build the configuration without activating it
             switch [MARK] [args]   activate, marking the result if MARK is given
             update [MARK] [args]   git pull --ff-only, then switch
@@ -272,6 +273,28 @@ in
               if [[ -n $tag ]]; then
                 git -C "$flake" tag -a "$tag" -m "$msg"
                 echo "tag: $tag -> $(git -C "$flake" rev-parse --short HEAD) (в hm generations — после switch)"
+              fi
+              ;;
+            push)
+              if (( $# > 0 )); then
+                echo "usage: hm push (использует настройки push каждого репозитория)" >&2
+                exit 1
+              fi
+              git -C "$flake" rev-parse --git-dir > /dev/null
+              prepare_core
+              if [[ -n $core_flake ]]; then
+                echo "=== core: $core_flake ==="
+                git -C "$core_flake" push --follow-tags
+                echo "=== home-manager: $flake ==="
+              fi
+              if git -C "$flake" push --follow-tags; then
+                :
+              else
+                result=$?
+                if [[ -n $core_flake ]]; then
+                  echo "hm: push home-manager не выполнен; core уже отправлен. Исправьте ошибку и повторите hm push." >&2
+                fi
+                exit "$result"
               fi
               ;;
             build)

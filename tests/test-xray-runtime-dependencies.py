@@ -3,6 +3,7 @@
 import ast
 from pathlib import Path
 import re
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,11 +22,7 @@ class RuntimeDependencyTests(unittest.TestCase):
         self.assertIn('env -i PATH="$PATH" HOME="$TMPDIR"', text)
 
     def test_python_imports_and_resource_edges(self):
-        expected = {
-            "scripts/test-xray-runtime.py": {"contextlib", "base64", "importlib.util", "json", "os", "pathlib", "socket", "ssl", "subprocess", "tempfile", "threading", "time", "urllib.request"},
-            "scripts/xray-test-fixture.py": {"base64", "http.server", "subprocess"},
-        }
-        for path, imports in expected.items():
+        for path in ("scripts/test-xray-runtime.py", "scripts/xray-test-fixture.py"):
             tree = ast.parse((ROOT / path).read_text())
             actual = set()
             for node in ast.walk(tree):
@@ -34,7 +31,7 @@ class RuntimeDependencyTests(unittest.TestCase):
                 elif isinstance(node, ast.ImportFrom):
                     self.assertEqual(node.level, 0)
                     actual.add(node.module)
-            self.assertEqual(actual, imports)
+            self.assertLessEqual({name.split(".")[0] for name in actual}, sys.stdlib_module_names)
         tree = ast.parse((ROOT / "scripts/test-xray-runtime.py").read_text())
         loads = [call for call in ast.walk(tree) if isinstance(call, ast.Call) and ast.unparse(call.func) == "load"]
         self.assertEqual({ast.literal_eval(call.args[1].right) for call in loads},

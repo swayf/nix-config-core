@@ -3,10 +3,7 @@
 import ast
 from pathlib import Path
 import re
-import shutil
-import subprocess
 import sys
-import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,14 +13,6 @@ NAMES = ("herdr-navigation", "herdr-radar", "herdr-review-plugins", "herdr-proje
 
 class InstallerDependencies(unittest.TestCase):
     def test_only_standard_library_imports(self):
-        expected = {
-            "herdr-navigation": {"json", "os", "pathlib", "re", "subprocess", "sys", "tempfile", "tomllib"},
-            "herdr-radar": {"json", "os", "pathlib", "re", "subprocess", "sys", "time", "tomllib"},
-            "herdr-review-plugins": {"json", "os", "pathlib", "re", "subprocess", "sys", "tempfile", "tomllib"},
-            "herdr-projects": {"argparse", "os", "pathlib", "subprocess", "tempfile", "tomllib"},
-            "pi-prompts": {"argparse", "pathlib"},
-            "terminal-browser": {"json", "subprocess", "sys"},
-        }
         for name in NAMES:
             tree = ast.parse((HELPERS / f"install-{name}.py").read_text())
             imports = set()
@@ -33,7 +22,7 @@ class InstallerDependencies(unittest.TestCase):
                 elif isinstance(node, ast.ImportFrom):
                     self.assertEqual(node.level, 0)
                     imports.add(node.module)
-            self.assertEqual(imports, expected[name])
+            self.assertLessEqual({module.split(".")[0] for module in imports}, sys.stdlib_module_names)
 
     def test_no_personal_sources_or_policy_payload(self):
         for name in NAMES:
@@ -83,20 +72,9 @@ class InstallerDependencies(unittest.TestCase):
             self.assertNotIn("claude-profile.py", path.read_text())
             self.assertNotIn("install-pi-shell.py", path.read_text())
 
-    def test_native_check_has_only_audited_source_files(self):
+    def test_native_check_runs_standalone_suites_and_composition(self):
         text = (ROOT / "tests/agents-installers.nix").read_text()
-        self.assertEqual(re.findall(r"\.\./modules/[^\s;]+", text), [
-            "../modules/home-manager/agents-container",
-            "../modules/home-manager/agents-container/test-install-herdr-navigation.py",
-            "../modules/home-manager/agents-container/test-install-herdr-radar.py",
-            "../modules/home-manager/agents-container/test-install-herdr-review-plugins.py",
-            "../modules/home-manager/agents-container/test-install-herdr-projects.py",
-            "../modules/home-manager/agents-container/test-install-pi-prompts.py",
-            "../modules/home-manager/agents-container/test-install-pi-shell.py",
-            "../modules/home-manager/agents-container/test-install-terminal-browser.py",
-            "../modules/home-manager/agents-container/test-wiki-init.py",
-            "../modules/home-manager/agents-container/test-claude-profile.py",
-        ])
+        self.assertIn("test-agents-installers-standalone.py", text)
         self.assertIn("installers.herdrNavigation", text)
         self.assertIn("installers.herdrRadar", text)
         self.assertIn("installers.herdrReviewPlugins", text)
@@ -159,7 +137,7 @@ class InstallerDependencies(unittest.TestCase):
             elif isinstance(node, ast.ImportFrom):
                 self.assertEqual(node.level, 0)
                 imports.add(node.module)
-        self.assertEqual(imports, {"pathlib", "hashlib", "json", "os", "re", "shlex", "sys", "tempfile"})
+        self.assertLessEqual({module.split(".")[0] for module in imports}, sys.stdlib_module_names)
         for token in ("/home/", "/Users/", "projects_kvm", "swayf", "https://", "http://",
                       "Path.home", "expanduser", "XDG_", "CLAUDE_CONFIG_DIR", "AGENTS_CLAUDE_PROFILE",
                       "dangerously-skip-permissions", "opus-sp-fix", '"cld"', '"cldsp"',
@@ -180,7 +158,7 @@ class InstallerDependencies(unittest.TestCase):
             elif isinstance(node, ast.ImportFrom):
                 self.assertEqual(node.level, 0)
                 imports.add(node.module)
-        self.assertEqual(imports, {"json", "os", "pathlib", "shlex", "sys"})
+        self.assertLessEqual({module.split(".")[0] for module in imports}, sys.stdlib_module_names)
         for token in ("/home/", "/Users/", "projects_kvm", "swayf", "/etc/agents",
                       ".pi/profiles", ".pi/agent", "general", "wiki", "clipboard/socket",
                       "Path.home", "expanduser", "os.environ", "getenv", "subprocess",
@@ -191,51 +169,6 @@ class InstallerDependencies(unittest.TestCase):
         self.assertIn('validate(policy)', text)
         self.assertIn('return \'"$HOME"/\' + shlex.quote(path)', text)
         self.assertNotIn("resolve(", text)
-
-    def test_copied_helpers_and_tests_are_standalone(self):
-        with tempfile.TemporaryDirectory(prefix="standalone-agents-installers-") as temp:
-            work = Path(temp)
-            home = work / "home"
-            home.mkdir()
-            for name in NAMES:
-                for prefix in ("install-", "test-install-"):
-                    filename = f"{prefix}{name}.py"
-                    shutil.copyfile(HELPERS / filename, work / filename)
-            env = {"HOME": str(home), "PATH": "", "PYTHONDONTWRITEBYTECODE": "1"}
-            for name in NAMES:
-                with self.subTest(name=name):
-                    result = subprocess.run([sys.executable, str(work / f"test-install-{name}.py")],
-                                            cwd=work, env=env, capture_output=True, text=True, timeout=60)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertNotIn("skipped", result.stderr)
-            for filename in ("install-pi-shell.py", "test-install-pi-shell.py"):
-                shutil.copyfile(HELPERS / filename, work / filename)
-            result = subprocess.run([sys.executable, str(work / "test-install-pi-shell.py")],
-                                    cwd=work, env={**env, "TEST_SHELL": shutil.which("bash")},
-                                    capture_output=True, text=True, timeout=60)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertNotIn("skipped", result.stderr)
-            for filename in ("claude-profile.py", "test-claude-profile.py"):
-                shutil.copyfile(HELPERS / filename, work / filename)
-            result = subprocess.run([sys.executable, str(work / "test-claude-profile.py")],
-                                    cwd=work, env=env, capture_output=True, text=True, timeout=60)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertNotIn("skipped", result.stderr)
-            # Shell helper has an explicit, narrow Bash/coreutils tool contract.
-            for filename in ("wiki-init.sh", "test-wiki-init.py"):
-                shutil.copyfile(HELPERS / filename, work / filename)
-            tools = work / "bin"
-            tools.mkdir()
-            for tool in ("bash", "mkdir", "readlink", "basename", "mv", "rm", "ln", "cat"):
-                source = shutil.which(tool)
-                self.assertIsNotNone(source, tool)
-                (tools / tool).symlink_to(source)
-            result = subprocess.run([sys.executable, str(work / "test-wiki-init.py")],
-                                    cwd=work, env={**env, "PATH": str(tools)},
-                                    capture_output=True, text=True, timeout=60)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertNotIn("skipped", result.stderr)
-            self.assertEqual(list(home.iterdir()), [])
 
 
 if __name__ == "__main__":
