@@ -19,6 +19,11 @@ class InstallWikiAskTest(unittest.TestCase):
                               env={**os.environ, "HOME": str(home), **env}, check=check,
                               capture_output=True, text=True)
 
+    def copy_local_package(self, target):
+        # Локальные overrides должны быть writable даже при source из /nix/store.
+        shutil.copytree(PACKAGE, target, copy_function=shutil.copyfile)
+        target.chmod(0o755)
+
     def target(self, profile):
         return profile / "extensions/wiki-ask"
 
@@ -44,7 +49,8 @@ class InstallWikiAskTest(unittest.TestCase):
             (home / ".pi/profiles/not-a-directory").write_text("keep")
             for version in (1, 1, 2):
                 package = root / f"package v{version}"
-                shutil.copytree(PACKAGE, package, dirs_exist_ok=True)
+                if not package.exists():
+                    shutil.copytree(PACKAGE, package)
                 self.install(home, package)
                 for profile in self.profiles(home):
                     target = self.target(profile)
@@ -66,7 +72,7 @@ class InstallWikiAskTest(unittest.TestCase):
             home = Path(temp) / "home"
             profile = home / ".pi/profiles/code"
             target = self.target(profile)
-            shutil.copytree(PACKAGE, target)
+            self.copy_local_package(target)
             self.install(home)
             backup = profile / "wiki-ask.before-home-manager"
             self.assertTrue(target.is_symlink())
@@ -88,7 +94,7 @@ class InstallWikiAskTest(unittest.TestCase):
                 if case == "file":
                     target.write_text("keep")
                 else:
-                    shutil.copytree(PACKAGE, target)
+                    self.copy_local_package(target)
                     if case == "modified":
                         (target / "core.mjs").write_text("local implementation")
                     elif case in ("extra", "hidden"):
@@ -151,7 +157,7 @@ class InstallWikiAskTest(unittest.TestCase):
             home = root / "home"
             profile = home / ".pi/profiles/code"
             target = self.target(profile)
-            shutil.copytree(PACKAGE, target)
+            self.copy_local_package(target)
             bin_dir = root / "bin"
             bin_dir.mkdir()
             command = bin_dir / "sha256sum"

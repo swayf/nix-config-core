@@ -39,7 +39,9 @@ class InstallLazyCapabilitiesTest(unittest.TestCase):
             (extensions_alias / "extensions").symlink_to(external)
             for version in (1, 1, 2):
                 source = root / f"source v{version}"
-                shutil.copytree(SOURCE, source, dirs_exist_ok=True)
+                # Повторная установка использует ту же immutable-копию из store.
+                if not source.exists():
+                    shutil.copytree(SOURCE, source)
                 self.install(home, source)
                 for profile in (home / ".pi/agent", custom, *[home / ".pi/profiles" / p for p in ("general", "code", "wiki")]):
                     target = profile / "extensions/lazy-capabilities"
