@@ -36,6 +36,35 @@ in
           profile=${lib.escapeShellArg cfg.profile}
           flake="''${HM_FLAKE:-$flake}"
           profile="''${HM_PROFILE:-$profile}"
+          core_flake="''${HM_CORE_FLAKE:-}"
+          core_args=()
+
+          # Git transport includes tracked dirty files but excludes ignored secrets.
+          # Keep the public lock portable: the local override is invocation-only.
+          prepare_core() {
+            [[ -n $core_flake ]] || return 0
+            if [[ ! -f "$core_flake/flake.nix" ]]; then
+              echo "hm: нет flake.nix в HM_CORE_FLAKE: $core_flake" >&2
+              return 1
+            fi
+            core_flake="$(realpath -- "$core_flake")"
+            local root
+            root="$(git -C "$core_flake" rev-parse --show-toplevel)" || return
+            if [[ $root != "$core_flake" || $core_flake == "$(realpath -- "$flake")" ]]; then
+              echo "hm: HM_CORE_FLAKE должен указывать на отдельный корень Git checkout core" >&2
+              return 1
+            fi
+            # Nix treats an unescaped space/#/? as a different flake reference.
+            local LC_ALL=C encoded="" char escaped i
+            for (( i=0; i<''${#core_flake}; i++ )); do
+              char="''${core_flake:i:1}"
+              case "$char" in
+                [a-zA-Z0-9/._~-]) encoded+="$char" ;;
+                *) printf -v escaped '%%%02X' "'$char"; encoded+="$escaped" ;;
+              esac
+            done
+            core_args=(--override-input core "git+file://$encoded" --no-write-lock-file)
+          }
 
           # Named GC roots, one symlink per mark. Duplicated in
           # scripts/_hm -- the completion resolves the same two defaults without
@@ -46,8 +75,8 @@ in
             cat <<EOF
           usage: hm <command> [args]
 
-            status                 git add -A, then show the working tree
-            commit [-t TAG] [msg]  commit everything; msg becomes the tag (-n: none)
+            status                 stage/show core, then HM (git add -A)
+            commit [-t TAG] [msg]  commit core, then HM with the same message; tag HM (-n: none)
             build                  build the configuration without activating it
             switch [MARK] [args]   activate, marking the result if MARK is given
             update [MARK] [args]   git pull --ff-only, then switch
@@ -56,11 +85,12 @@ in
             mark [-f] NAME [ID]    pin a generation under NAME (default: current)
             unmark NAME            drop the mark, unpinning the generation
             rollback [ID|NAME]     back one generation, or to an id or a mark
-            diff [git diff args]   show staged and unstaged changes (git diff HEAD)
+            diff [git diff args]   show core, then HM changes (git diff HEAD)
             diff-closures [ID|NAME] diff closures against the active generation
 
           flake: $flake  (override with \$HM_FLAKE)
           profile: $profile  (override with \$HM_PROFILE)
+          core: ''${core_flake:-public pin}  (local checkout via \$HM_CORE_FLAKE)
           marks: $marks_dir  (override with \$HM_MARKS)
           EOF
           }
@@ -133,6 +163,14 @@ in
 
           case "$cmd" in
             status)
+              git -C "$flake" rev-parse --git-dir > /dev/null
+              prepare_core
+              if [[ -n $core_flake ]]; then
+                echo "=== core: $core_flake ==="
+                git -C "$core_flake" add -A
+                git -C "$core_flake" status
+                echo "=== home-manager: $flake ==="
+              fi
               git -C "$flake" add -A
               git -C "$flake" status
               ;;
@@ -172,7 +210,21 @@ in
               if (( $# > 0 )); then
                 msg_given="1"
               fi
-              msg="''${*:-Update Home Manager configuration}"
+              msg="''${*:-Обновление конфигурации Home Manager}"
+
+              # Preflight both repositories before staging either. Separate Git
+              # commits cannot be atomic; stop before HM if the core commit fails.
+              git -C "$flake" rev-parse --git-dir > /dev/null
+              prepare_core
+              if [[ -n $core_flake ]]; then
+                git -C "$core_flake" add -A
+                if git -C "$core_flake" diff --cached --quiet; then
+                  echo "core: нет изменений для коммита"
+                else
+                  git -C "$core_flake" status --short
+                  git -C "$core_flake" commit -m "$msg"
+                fi
+              fi
 
               git -C "$flake" add -A
               committed=""
@@ -180,8 +232,15 @@ in
                 echo "Нет изменений для коммита"
               else
                 git -C "$flake" status --short
-                git -C "$flake" commit -m "$msg"
-                committed="1"
+                if git -C "$flake" commit -m "$msg"; then
+                  committed="1"
+                else
+                  result=$?
+                  if [[ -n $core_flake ]]; then
+                    echo "hm: commit home-manager не выполнен; core мог быть уже сохранён. Исправьте ошибку и повторите hm commit." >&2
+                  fi
+                  exit "$result"
+                fi
               fi
 
               # The message is the tag name by default; -t only overrides it and
@@ -216,7 +275,8 @@ in
               fi
               ;;
             build)
-              home-manager build --flake "$flake#$profile"
+              prepare_core
+              home-manager build --flake "$flake#$profile" "''${core_args[@]}"
               ;;
             switch)
               # A leading word that is not a flag is a mark for the generation
@@ -242,8 +302,10 @@ in
               # friends are exactly that on a machine migrating from hand-written
               # dotfiles. The timestamp keeps a second switch from colliding with
               # the backup left by the first.
+              prepare_core
               home-manager switch \
                 --flake "$flake#$profile" \
+                "''${core_args[@]}" \
                 -b "hm-backup-$(date +%Y%m%d-%H%M%S)" \
                 "$@"
 
@@ -431,6 +493,12 @@ in
               # HEAD includes both staged and unstaged changes, without touching
               # the index. Untracked files are not shown until added to Git.
               # Auto color keeps terminal output readable and pipes ANSI-free.
+              prepare_core
+              if [[ -n $core_flake ]]; then
+                echo "=== core: $core_flake ==="
+                git -C "$core_flake" diff --color=auto HEAD "$@"
+                echo "=== home-manager: $flake ==="
+              fi
               git -C "$flake" diff --color=auto HEAD "$@"
               ;;
             diff-closures)
@@ -439,8 +507,9 @@ in
               if [[ -z "''${1:-}" ]]; then
                 # What the next switch would change. --no-link so this does not
                 # drop a ./result into whatever directory it was run from.
+                prepare_core
                 built="$(nix build --no-link --print-out-paths \
-                  "$flake#homeConfigurations.$profile.activationPackage")"
+                  "''${core_args[@]}" "$flake#homeConfigurations.$profile.activationPackage")"
                 nix store diff-closures "$current_profile" "$built"
               else
                 nix store diff-closures "$(resolve_gen "$1")" "$current_profile"

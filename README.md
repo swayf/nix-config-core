@@ -104,8 +104,11 @@ A changed source digest invalidates old checks, not installation-attempt markers
 `lib.vpsCliSource` exposes tool-owned scripts for explicit source/fixture use.
 Source execution requires `VPS_CLI_POLICY`, `VPS_CORE_REV` and `VPS_CORE_NAR_HASH`;
 `VPS_XRAY_RENDERER` may select an absolute tool-owned renderer. The package binds
-all four values. `--repo`/`VPS_FLAKE` chooses an editable caller checkout, not the
-CLI implementation. Existing legacy state remains selected; new state uses
+all four values.
+Checkout выбирается через `--repo`, затем `HM_FLAKE`, иначе текущий каталог.
+Это выбор деклараций вызывающей стороны, а не реализации CLI;
+`VPS_FLAKE` больше не используется.
+Existing legacy state remains selected; new state uses
 `XDG_STATE_HOME/vps/HOST`, and `--state-dir ROOT` explicitly selects `ROOT/HOST`.
 
 `vps-state.py` defaults to read-only preview; only explicit `--copy` publishes a
@@ -154,7 +157,23 @@ workspace-relative Nix options expression also uses `desktop.homeOutput`.
 clip, preview, pdf_opti, snap-clean, nxd and vless-qr packages without executing
 them. `shell-hm` declares `programs.hm.profile/flakePath`; the caller selects its
 profile. Personal aliases, SSH/VPS wrappers and nxd completion policy stay outside
-these modules. Importing modules does not run Podman, reset a live editor, inject
+these modules.
+
+`HM_CORE_FLAKE` включает локальную работу с core в `hm`: это путь к отдельному
+корню Git checkout с `flake.nix`, без личного default внутри core. `build`,
+`switch` и будущая сборка в `diff-closures` передают локальный Git input через
+`--override-input core ... --no-write-lock-file`; публичный lock не переписывается.
+Используются и незакоммиченные изменения tracked-файлов; новые файлы сначала
+нужно добавить в Git. Пустая переменная сохраняет прежний режим публичного pin.
+`status` делает stage и показывает сначала core, затем HM; `diff` выводит оба
+`git diff HEAD` без stage, с заголовками. `commit` сохраняет изменённые репозитории
+в том же порядке с одним сообщением, без push; теги ставятся только в HM.
+Два коммита не атомарны: ошибка HM не отменяет уже сохранённый core.
+`flake-update` обновляет публичные inputs, затем switch использует локальный core;
+`update` делает pull только HM. Для первого применения нового `hm` старым
+помощником передайте override явно в `hm switch`.
+
+Importing modules does not run Podman, reset a live editor, inject
 input, configure root-owned uinput, or enable GNOME extensions automatically.
 
 `lib.mkDesktopChecks { inherit pkgs; }` and `checks.x86_64-linux.desktop-contracts`

@@ -137,7 +137,9 @@ class HelpTests(unittest.TestCase):
 
     def test_environment_dependent_defaults_match_help(self):
         for env, repo in [({}, "/checkout"),
-                          ({"VPS_FLAKE": "/flake", "XDG_STATE_HOME": "/state"}, "/flake")]:
+                          ({"HM_FLAKE": "/flake", "XDG_STATE_HOME": "/state"}, "/flake"),
+                          ({"VPS_FLAKE": "/obsolete"}, "/checkout"),
+                          ({"HM_FLAKE": "/flake", "VPS_FLAKE": "/obsolete"}, "/flake")]:
             with self.subTest(env=env), patch.dict(os.environ, env, clear=True), \
                  patch.object(V.os, "getcwd", return_value="/checkout"), \
                  patch.object(V.Path, "home", return_value=Path("/home/test")):
@@ -147,6 +149,10 @@ class HelpTests(unittest.TestCase):
                 self.assertIsNone(args.state_dir)
                 text = " ".join(self.help_text(parser, []).split())
                 self.assertIn(f"(default: {repo})", text)
+                self.assertIn("HM_FLAKE if set, otherwise current directory", text)
+                self.assertNotIn("VPS_FLAKE", text)
+                self.assertEqual(parser.parse_args(["--repo", "/explicit", "check", "vps-test"]).repo,
+                                 Path("/explicit"))
                 self.assertIn("default: XDG_STATE_HOME/vps; existing legacy state stays in REPO/hosts/generated until explicit copy; HOST is appended", text)
                 text = " ".join(self.help_text(parser, ["probe"]).split())
                 self.assertIn("(default: /home/test/.ssh/known_hosts)", text)

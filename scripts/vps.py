@@ -1821,8 +1821,8 @@ class DefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
 
 def parser():
     p = argparse.ArgumentParser(prog="vps-vless", description=__doc__, formatter_class=DefaultsHelpFormatter)
-    p.add_argument("--repo", type=Path, default=Path(os.environ.get("VPS_FLAKE", os.getcwd())),
-                   help="flake checkout; VPS_FLAKE if set, otherwise current directory")
+    p.add_argument("--repo", type=Path, default=Path(os.environ.get("HM_FLAKE", os.getcwd())),
+                   help="flake checkout; HM_FLAKE if set, otherwise current directory")
     p.add_argument("--state-dir", type=Path, default=None,
                    help="override workflow artifact root (default: XDG_STATE_HOME/vps; existing legacy state stays in REPO/hosts/generated until explicit copy; HOST is appended); custom roots must be outside the checkout")
     p.add_argument("--debug", action="store_true",
