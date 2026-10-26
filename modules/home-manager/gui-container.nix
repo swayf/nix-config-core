@@ -34,6 +34,9 @@ let
       export GUI_SHARED=${lib.escapeShellArg cfg.sharedDirectory}
       export GUI_TIME_ZONE=${lib.escapeShellArg cfg.timeZone}
       export GUI_BROWSER_PROFILES=${lib.escapeShellArg (lib.concatStringsSep " " (builtins.attrNames cfg.browserProfiles))}
+      export GUI_BROWSER_PROFILE_LIST=${lib.escapeShellArg (
+        lib.concatStringsSep "\n" (lib.mapAttrsToList (name: profile: "${profile.browser} ${name}") cfg.browserProfiles)
+      )}
       export GUI_IMAGE=${image}
       export GUI_IMAGE_REF=${image.imageName}:${image.imageTag}
       export GUI_GATEWAY_IMAGE=${gateway}

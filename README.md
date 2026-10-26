@@ -412,7 +412,11 @@ DIRECT fallback. `gui-windows-shortcuts` installs an explicitly invoked generato
 it never creates Windows shortcuts during activation. Personal browser profiles
 and extra application packages remain caller options. Declared
 `programs.gui-container.browserProfiles.NAME` profiles can be launched with
-`gcnt NAME [ARG...]`; `gcnt help` lists the names. Built-in CLI commands take
+`gcnt NAME [ARG...]`; `gcnt help` lists the names. `gcnt profiles` lists default
+and declared profiles grouped by browser; `gcnt profiles firefox` filters the list
+(also `brave` or `chrome`). This reads launcher configuration without Podman,
+state changes or a desktop; browser-created profiles and retained data from removed
+declarations are not scanned. Built-in CLI commands take
 precedence, so `gcnt firefox`, `gcnt brave` and `gcnt chrome` still use their
 default profiles. The explicit `gcnt exec gcnt-profile-NAME` form remains available,
 including for profiles whose names collide with built-in commands. Unknown names

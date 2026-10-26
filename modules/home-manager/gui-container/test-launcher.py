@@ -178,6 +178,58 @@ sys.exit(status)
         self.assertEqual(self.data()["calls"], [])
         self.assertFalse((self.root / "state").exists())
 
+    def test_profiles_list_grouped_by_declared_browser_without_runtime(self):
+        env = {k: v for k, v in self.env.items() if not k.startswith("GUI_")}
+        # Names are arbitrary; grouping must use metadata, not name prefixes.
+        env["GUI_BROWSER_PROFILE_LIST"] = "chrome work\nfirefox personal\nbrave firefox-other\nfirefox profiles"
+        result = self.ok(self.launch("profiles", env=env))
+        self.assertEqual(result.stdout, "BROWSER\tPROFILE\n"
+                         "firefox\tdefault\nfirefox\tpersonal\nfirefox\tprofiles\n"
+                         "brave\tdefault\nbrave\tfirefox-other\n"
+                         "chrome\tdefault\nchrome\twork\n")
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(self.data()["calls"], [])
+        self.assertFalse((self.root / "state").exists())
+
+    def test_profiles_filter_each_browser(self):
+        env = dict(self.env, GUI_BROWSER_PROFILE_LIST="firefox personal\nbrave work\nchrome testing")
+        for browser, name in (("firefox", "personal"), ("brave", "work"), ("chrome", "testing")):
+            with self.subTest(browser=browser):
+                result = self.ok(self.launch("profiles", browser, env=env))
+                self.assertEqual(result.stdout, f"BROWSER\tPROFILE\n{browser}\tdefault\n{browser}\t{name}\n")
+        self.assertEqual(self.data()["calls"], [])
+        self.assertFalse((self.root / "state").exists())
+
+    def test_profiles_without_declarations_show_defaults(self):
+        env = {k: v for k, v in self.env.items() if not k.startswith("GUI_")}
+        for value in (None, ""):
+            if value is not None:
+                env["GUI_BROWSER_PROFILE_LIST"] = value
+            result = self.ok(self.launch("profiles", env=env))
+            self.assertEqual(result.stdout, "BROWSER\tPROFILE\nfirefox\tdefault\nbrave\tdefault\nchrome\tdefault\n")
+            result = self.ok(self.launch("profiles", "brave", env=env))
+            self.assertEqual(result.stdout, "BROWSER\tPROFILE\nbrave\tdefault\n")
+        self.assertEqual(self.data()["calls"], [])
+        self.assertFalse((self.root / "state").exists())
+
+    def test_profiles_reject_invalid_arguments_without_state(self):
+        for args in (("unknown",), ("",), ("--help",), ("firefox", "brave"), ("$(touch marker)",)):
+            with self.subTest(args=args):
+                result = self.launch("profiles", *args)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("Usage: gcnt profiles", result.stderr)
+                self.assertEqual(result.stdout, "")
+        self.assertFalse((self.root / "state").exists())
+        self.assertFalse((self.root / "marker").exists())
+        self.assertEqual(self.data()["calls"], [])
+
+    def test_profiles_command_takes_precedence_over_profile_name(self):
+        env = dict(self.env, GUI_BROWSER_PROFILES="profiles", GUI_BROWSER_PROFILE_LIST="firefox profiles")
+        result = self.ok(self.launch("profiles", "firefox", env=env))
+        self.assertIn("firefox\tprofiles\n", result.stdout)
+        self.assertEqual(self.data()["calls"], [])
+        self.assertFalse((self.root / "state").exists())
+
     def test_declared_profile_shortcuts_preserve_arguments(self):
         names = ("firefox-personal", "chrome-work", "brave-work", "1_Test")
         env = dict(self.env, GUI_BROWSER_PROFILES=" ".join(names))

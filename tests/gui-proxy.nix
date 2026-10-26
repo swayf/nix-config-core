@@ -24,6 +24,7 @@ let
       programs.gui-container.browserProfiles = {
         firefox-personal.browser = "firefox";
         chrome-work.browser = "chrome";
+        personal.browser = "brave";
       };
     } ];
   };
@@ -54,7 +55,9 @@ let
       && lib.hasInfix "export GUI_TIME_ZONE=${lib.escapeShellArg "America/Chicago"}\n" (launcher zoned).text
       && lib.hasInfix "GUI container timezone: %s" (launcher zoned).text
       && lib.hasInfix "export GUI_BROWSER_PROFILES=${lib.escapeShellArg ""}\n" (launcher enabled).text
-      && lib.hasInfix "export GUI_BROWSER_PROFILES=${lib.escapeShellArg "chrome-work firefox-personal"}\n" (launcher profiled).text
+      && lib.hasInfix "export GUI_BROWSER_PROFILES=${lib.escapeShellArg "chrome-work firefox-personal personal"}\n" (launcher profiled).text
+      && lib.hasInfix "export GUI_BROWSER_PROFILE_LIST=${lib.escapeShellArg ""}\n" (launcher enabled).text
+      && lib.hasInfix "export GUI_BROWSER_PROFILE_LIST=${lib.escapeShellArg "chrome chrome-work\nfirefox firefox-personal\nbrave personal"}\n" (launcher profiled).text
       && zoned.config.programs.gui-container.image.drvPath != c.programs.gui-container.image.drvPath
       && c.programs.gui-container.browserPolicies == { firefox = { }; brave = { }; chrome = { }; }
       && protected.config.programs.gui-container.browserPolicies.firefox.Preferences."privacy.resistFingerprinting"

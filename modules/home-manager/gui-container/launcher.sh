@@ -9,10 +9,15 @@ fi
 command=${1:-up}
 if (( $# )); then shift; fi
 usage() {
-  echo 'Usage: gcnt {up|down|rebuild|update|shell|firefox [ARG...]|brave [ARG...]|chrome [ARG...]|PROFILE [ARG...]|exec COMMAND...|status|stats|logs|doctor|check|help}'
+  echo 'Usage: gcnt {up|down|rebuild|update|shell|firefox [ARG...]|brave [ARG...]|chrome [ARG...]|PROFILE [ARG...]|profiles [firefox|brave|chrome]|exec COMMAND...|status|stats|logs|doctor|check|help}'
 }
 case "$command" in
   up|down|rebuild|update|status|stats|logs|doctor|check|shell|help|--help|-h) (( $# == 0 )) || { echo "Unexpected arguments for $command" >&2; exit 2; } ;;
+  profiles)
+    (( $# <= 1 )) && [[ ${1-firefox} == firefox || ${1-firefox} == brave || ${1-firefox} == chrome ]] || {
+      echo 'Usage: gcnt profiles [firefox|brave|chrome]' >&2; exit 2;
+    }
+    ;;
   exec) (( $# )) || { echo 'Usage: gcnt exec COMMAND [ARG...]' >&2; exit 2; } ;;
   firefox|brave|chrome) set -- "$command" "$@"; command='exec' ;;
   *)
@@ -28,8 +33,21 @@ case "$command" in
     [[ $command == exec ]] || { usage >&2; exit 2; }
     ;;
 esac
-# Help/update need neither a desktop, Podman nor the lifecycle lock.
+# Help/profiles/update need neither a desktop, Podman nor the lifecycle lock.
 case "$command" in
+  profiles)
+    printf 'BROWSER\tPROFILE\n'
+    for browser in firefox brave chrome; do
+      [[ $# == 0 || $1 == "$browser" ]] || continue
+      printf '%s\tdefault\n' "$browser"
+      while read -r profile_browser profile; do
+        if [[ $profile_browser == "$browser" && -n $profile ]]; then
+          printf '%s\t%s\n' "$browser" "$profile"
+        fi
+      done <<< "${GUI_BROWSER_PROFILE_LIST:-}"
+    done
+    exit 0
+    ;;
   help|--help|-h)
     usage
     printf '%s\n' \
@@ -40,10 +58,11 @@ case "$command" in
       '  exec     Run an application as a host Wayland/WSLg window, or any command.' \
       '  firefox/brave/chrome [ARG...]  Launch a browser with its default profile.' \
       '  PROFILE [ARG...]  Launch a declared browser profile; built-in commands take precedence.' \
+      '  profiles [firefox|brave|chrome]  List default and declared profiles by browser; no container needed.' \
       '  down     Remove containers, not persistent data.' \
       '  status/stats/logs  Inspect containers, CPU/RAM or logs.' \
       '  doctor/check      Check host prerequisites or US egress.' \
-      '  All except help/update clean stopped gcnt containers and unused old gcnt images.'
+      '  All except help/profiles/update clean stopped gcnt containers and unused old gcnt images.'
     if [[ -n ${GUI_BROWSER_PROFILES:-} ]]; then
       printf '  Profiles: %s\n' "$GUI_BROWSER_PROFILES"
     fi
