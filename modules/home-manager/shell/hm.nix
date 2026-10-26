@@ -44,6 +44,20 @@ in
           core_flake=${lib.escapeShellArg (if cfg.coreFlakePath == null then "" else cfg.coreFlakePath)}
           core_flake="''${HM_CORE_FLAKE-$core_flake}"
           core_args=()
+          build_flake="$flake"
+
+          # Nix treats an unescaped space/#/? as a different flake reference.
+          git_uri() {
+            local path="$1" LC_ALL=C encoded="" char escaped i
+            for (( i=0; i<''${#path}; i++ )); do
+              char="''${path:i:1}"
+              case "$char" in
+                [a-zA-Z0-9/._~-]) encoded+="$char" ;;
+                *) printf -v escaped '%%%02X' "'$char"; encoded+="$escaped" ;;
+              esac
+            done
+            printf 'git+file://%s' "$encoded"
+          }
 
           # Git transport includes tracked dirty files but excludes ignored secrets.
           # Keep the public lock portable: the local override is invocation-only.
@@ -60,16 +74,33 @@ in
               echo "hm: HM_CORE_FLAKE должен указывать на отдельный корень Git checkout core" >&2
               return 1
             fi
-            # Nix treats an unescaped space/#/? as a different flake reference.
-            local LC_ALL=C encoded="" char escaped i
-            for (( i=0; i<''${#core_flake}; i++ )); do
-              char="''${core_flake:i:1}"
-              case "$char" in
-                [a-zA-Z0-9/._~-]) encoded+="$char" ;;
-                *) printf -v escaped '%%%02X' "'$char"; encoded+="$escaped" ;;
+          }
+
+          # Overriding a root input makes Nix drop its shortRev/dirtyShortRev.
+          # Keep the user's flake as a Git input of a disposable wrapper instead:
+          # only the wrapper loses its revision, not the labelled generations.
+          # Unlike --reference-lock-file, these flags pass through the HM CLI.
+          prepare_build() {
+            build_args=("$@")
+            prepare_core
+            [[ -n $core_flake ]] || return 0
+            core_wrapper="$(mktemp -d "''${TMPDIR:-/tmp}/hm-core-flake.XXXXXXXXXX")"
+            trap 'rm -f -- "$core_wrapper/flake.nix"; rmdir -- "$core_wrapper"' EXIT
+            printf '{ inputs.home.url = "%s"; outputs = { home, ... }: home.outputs; }\n' \
+              "$(git_uri "$(realpath -- "$flake")")" > "$core_wrapper/flake.nix"
+            build_flake="$core_wrapper"
+            core_args=(--override-input home/core "$(git_uri "$core_flake")" --no-write-lock-file)
+            # User input paths are still relative to the original HM flake.
+            local i
+            for (( i=0; i<''${#build_args[@]}; i++ )); do
+              case "''${build_args[i]}" in
+                --override-input | --update-input)
+                  if [[ -n "''${build_args[i+1]:-}" && "''${build_args[i+1]}" != -* ]]; then
+                    build_args[i+1]="home/''${build_args[i+1]}"
+                  fi
+                  ;;
               esac
             done
-            core_args=(--override-input core "git+file://$encoded" --no-write-lock-file)
           }
 
           # Named GC roots, one symlink per mark. Duplicated in
@@ -305,12 +336,12 @@ in
               fi
               ;;
             build)
-              prepare_core
-              home-manager build --flake "$flake#$profile" "''${core_args[@]}"
+              prepare_build
+              home-manager build --flake "$build_flake#$profile" "''${core_args[@]}"
               ;;
             news)
-              prepare_core
-              home-manager news --flake "$flake#$profile" "''${core_args[@]}" "$@"
+              prepare_build "$@"
+              home-manager news --flake "$build_flake#$profile" "''${core_args[@]}" "''${build_args[@]}"
               ;;
             switch)
               # A leading word that is not a flag is a mark for the generation
@@ -336,12 +367,12 @@ in
               # friends are exactly that on a machine migrating from hand-written
               # dotfiles. The timestamp keeps a second switch from colliding with
               # the backup left by the first.
-              prepare_core
+              prepare_build "$@"
               home-manager switch \
-                --flake "$flake#$profile" \
+                --flake "$build_flake#$profile" \
                 "''${core_args[@]}" \
                 -b "hm-backup-$(date +%Y%m%d-%H%M%S)" \
-                "$@"
+                "''${build_args[@]}"
 
               # Only once activation succeeded -- a mark on a generation that
               # never came up is worse than no mark.
@@ -541,9 +572,9 @@ in
               if [[ -z "''${1:-}" ]]; then
                 # What the next switch would change. --no-link so this does not
                 # drop a ./result into whatever directory it was run from.
-                prepare_core
+                prepare_build
                 built="$(nix build --no-link --print-out-paths \
-                  "''${core_args[@]}" "$flake#homeConfigurations.$profile.activationPackage")"
+                  "''${core_args[@]}" "$build_flake#homeConfigurations.$profile.activationPackage")"
                 nix store diff-closures "$current_profile" "$built"
               else
                 nix store diff-closures "$(resolve_gen "$1")" "$current_profile"

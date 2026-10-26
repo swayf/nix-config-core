@@ -15,7 +15,9 @@ class NewsTests(unittest.TestCase):
     def setUpClass(cls):
         module = ROOT / "modules/home-manager/shell/hm.nix"
         expression = f'''let m = import {module} {{
-          config.programs.hm = {{ flakePath = "/default-checkout"; profile = "default-user"; }};
+          config.programs.hm = {{
+            flakePath = "/default-checkout"; coreFlakePath = null; profile = "default-user";
+          }};
           lib.escapeShellArg = s: "'" + s + "'";
           pkgs = {{ git = null; coreutils = null; writeShellApplication = args: args; }};
         }}; in (builtins.head m.config.home.packages).text'''
@@ -35,11 +37,16 @@ class NewsTests(unittest.TestCase):
         mock = self.root / "home-manager"
         mock.write_text("#!/usr/bin/env python3\n" +
                         "import json, os, sys\n" +
-                        "print(json.dumps(sys.argv[1:]))\n" +
+                        "from pathlib import Path\n" +
+                        "args = sys.argv[1:]\n" +
+                        "flake = Path(args[args.index('--flake') + 1].split('#')[0]) / 'flake.nix'\n" +
+                        "if flake.exists(): Path(os.environ['FLAKE_TRACE']).write_text(flake.read_text())\n" +
+                        "print(json.dumps(args))\n" +
                         "sys.exit(int(os.environ.get('MOCK_EXIT', '0')))\n")
         mock.chmod(0o755)
         self.env = dict(os.environ, PATH=f"{self.root}:{os.environ['PATH']}",
-                        HM_FLAKE=str(self.flake), HM_PROFILE="alice-kde", HM_CORE_FLAKE="")
+                        HM_FLAKE=str(self.flake), HM_PROFILE="alice-kde", HM_CORE_FLAKE="",
+                        FLAKE_TRACE=str(self.root / "flake-trace"), TMPDIR=str(self.root))
 
     def run_hm(self, *args):
         return subprocess.run(["bash", str(self.wrapper), *args], env=self.env,
@@ -72,10 +79,15 @@ class NewsTests(unittest.TestCase):
         self.env["HM_CORE_FLAKE"] = str(core)
         result = self.run_hm("news", "--unread")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), [
-            "news", "--flake", f"{self.flake}#alice-kde", "--override-input", "core",
+        args = json.loads(result.stdout)
+        wrapper = args[2].removesuffix("#alice-kde")
+        self.assertEqual(args, [
+            "news", "--flake", f"{wrapper}#alice-kde", "--override-input", "home/core",
             "git+file://" + str(core).replace(" ", "%20"), "--no-write-lock-file", "--unread",
         ])
+        self.assertIn('inputs.home.url = "git+file://' + str(self.flake).replace(" ", "%20") + '"',
+                      (self.root / "flake-trace").read_text())
+        self.assertFalse(Path(wrapper).exists())
 
     def test_news_preserves_cli_failure(self):
         self.env["MOCK_EXIT"] = "7"

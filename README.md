@@ -163,8 +163,15 @@ these modules.
 путь к отдельному корню Git checkout с `flake.nix`, без личного default внутри core.
 Незаданный `HM_CORE_FLAKE` сохраняет этот default; заданный переопределяет путь,
 а пустой явно отключает локальный core. `build`,
-`news`, `switch` и будущая сборка в `diff-closures` передают локальный Git input через
-`--override-input core ... --no-write-lock-file`; публичный lock не переписывается.
+`news`, `switch` и будущая сборка в `diff-closures` используют временный flake вне
+checkout: исходный HM checkout подключён как Git input `home`, его outputs
+передаются без изменений, локальный core — через
+`--override-input home/core ... --no-write-lock-file`. Публичный lock и index
+не переписываются, временный flake удаляется при выходе.
+Так сохраняются `self.shortRev`/`dirtyShortRev` исходного HM: override корневого
+`core` стирает ревизию и ломает привязку поколений к Git-тегам.
+`--reference-lock-file` эту проблему тоже решает в Nix, но HM CLI этот флаг
+не передаёт; временный flake использует поддерживаемые им аргументы.
 Используются и незакоммиченные изменения tracked-файлов; новые файлы сначала
 нужно добавить в Git. Пустая переменная сохраняет прежний режим публичного pin.
 `status` делает stage и показывает сначала core, затем HM; `diff` выводит оба
