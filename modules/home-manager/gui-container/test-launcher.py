@@ -38,6 +38,7 @@ class LauncherTest(unittest.TestCase):
             GUI_GATEWAY_IMAGE="gateway.tar", GUI_IMAGE_REF="localhost/hm-gui:new",
             GUI_GATEWAY_REF="localhost/hm-gui-gateway:new", GUI_GPU="", GUI_GPU_AUTO="0", GUI_AUDIO="0",
             GUI_SPEC="test", GUI_PROXY="http://127.0.0.1:2081", GUI_WAYLAND_SOCKET="",
+            GUI_TIME_ZONE="America/Chicago",
             XDG_RUNTIME_DIR=str(self.root), WAYLAND_DISPLAY="wayland",
             TEST_STATE=str(self.state), TEST_STORE=str(self.store),
             TEST_NIX_ARGS=str(self.root / "nix-args"),
@@ -166,6 +167,66 @@ sys.exit(status)
         self.assertFalse((self.root / "state").exists())
         self.assertEqual(self.data()["calls"], [])
 
+    def test_profile_help_lists_declared_names_without_runtime(self):
+        env = {k: v for k, v in self.env.items() if not k.startswith("GUI_")}
+        env["GUI_BROWSER_PROFILES"] = "firefox-personal chrome-work help"
+        result = self.ok(self.launch("help", env=env))
+        self.assertIn("PROFILE [ARG...]", result.stdout)
+        self.assertIn("Profiles: firefox-personal chrome-work help\n", result.stdout)
+        self.assertIn("default profile", result.stdout)
+        self.assertIn("built-in commands take precedence", result.stdout)
+        self.assertEqual(self.data()["calls"], [])
+        self.assertFalse((self.root / "state").exists())
+
+    def test_declared_profile_shortcuts_preserve_arguments(self):
+        names = ("firefox-personal", "chrome-work", "brave-work", "1_Test")
+        env = dict(self.env, GUI_BROWSER_PROFILES=" ".join(names))
+        for name in names:
+            for args in ((), ("https://example.com/path?a=1&b=2", "two words", "", "$(touch marker)")):
+                with self.subTest(name=name, args=args):
+                    self.cleanup_fixture(running=True)
+                    result = self.ok(self.launch(name, *args, env=env))
+                    self.assertEqual(self.data()["calls"][-1], [
+                        "exec", "-i", "--user=1000:1000", "hm-gui", "/opt/gui/exec",
+                        f"gcnt-profile-{name}", *args,
+                    ])
+                    self.assertEqual(result.stdout, "command output\n")
+                    self.assertIn("GUI container timezone: America/Chicago\n", result.stderr)
+                    self.assertFalse((self.root / "marker").exists())
+                    self.assertFalse(any(c[0] in ("rm", "create", "start", "load")
+                                         for c in self.data()["calls"]))
+
+    def test_unknown_profiles_do_not_touch_state(self):
+        for profiles in ("", "firefox-personal chrome-work"):
+            env = dict(self.env, GUI_BROWSER_PROFILES=profiles)
+            for name in ("firefox-missing", "firefox-person", "chrome-work-extra",
+                         "firefox-personal chrome-work", "firefox-*", "$(touch marker)"):
+                with self.subTest(profiles=profiles, name=name):
+                    self.assertEqual(self.launch(name, env=env).returncode, 2)
+        self.assertFalse((self.root / "state").exists())
+        self.assertFalse((self.root / "marker").exists())
+        self.assertEqual(self.data()["calls"], [])
+
+    def test_default_browsers_take_precedence_over_profile_names(self):
+        env = dict(self.env, GUI_BROWSER_PROFILES="firefox brave chrome")
+        for browser in ("firefox", "brave", "chrome"):
+            with self.subTest(browser=browser):
+                self.cleanup_fixture(running=True)
+                self.ok(self.launch(browser, "https://example.com", env=env))
+                self.assertEqual(self.data()["calls"][-1], [
+                    "exec", "-i", "--user=1000:1000", "hm-gui", "/opt/gui/exec",
+                    browser, "https://example.com",
+                ])
+
+    def test_explicit_profile_exec_remains_available(self):
+        self.cleanup_fixture(running=True)
+        self.ok(self.launch("exec", "gcnt-profile-firefox", "about:blank",
+                            env=dict(self.env, GUI_BROWSER_PROFILES="firefox")))
+        self.assertEqual(self.data()["calls"][-1], [
+            "exec", "-i", "--user=1000:1000", "hm-gui", "/opt/gui/exec",
+            "gcnt-profile-firefox", "about:blank",
+        ])
+
     def test_update_current_checkout_without_gui_environment(self):
         self.checkout(self.root)
         env = {k: v for k, v in self.env.items() if not k.startswith("GUI_")}
@@ -203,6 +264,7 @@ sys.exit(status)
     def test_stats_does_not_start_desktop(self):
         result = self.ok(self.launch("stats"))
         self.assertIn("resource counters", result.stdout)
+        self.assertNotIn("container timezone:", result.stdout + result.stderr)
         self.assertEqual(self.data()["calls"][-1], ["stats", "--no-stream", "hm-gui", "hm-gui-gateway"])
         self.assertFalse(any(c[0] in ("create", "start", "load") for c in self.data()["calls"]))
 
@@ -255,6 +317,8 @@ sys.exit(status)
             with self.subTest(args=args):
                 self.cleanup_fixture(running=True)
                 result = self.ok(self.launch(*args))
+                self.assertIn("GUI container timezone: America/Chicago\n", result.stderr)
+                self.assertNotIn("container timezone:", result.stdout)
                 self.assert_clean_images()
                 self.assertEqual(len(self.data()["containers"]), 4)
                 calls = self.data()["calls"]
@@ -263,6 +327,14 @@ sys.exit(status)
                     self.assertEqual(result.stdout, "command output\n")
                     self.assertEqual(calls[-1][0], "exec")
                     self.assertLess(max(i for i, c in enumerate(calls) if c[0] == "rmi"), len(calls) - 1)
+
+    def test_timezone_message_uses_configuration_not_host(self):
+        self.cleanup_fixture(running=True)
+        result = self.ok(self.launch("up", env=dict(self.env, GUI_TIME_ZONE="Etc/UTC", TZ="Asia/Tokyo")))
+        self.assertIn("GUI container timezone: Etc/UTC\n", result.stderr)
+        self.assertNotIn("America/Chicago", result.stderr)
+        self.assertNotIn("Asia/Tokyo", result.stderr)
+        self.assertFalse(any(c[0] in ("create", "start") for c in self.data()["calls"]))
 
     def test_cold_start_cleans_replaced_containers_and_old_images(self):
         self.require_devices()
@@ -499,6 +571,10 @@ sys.exit(status)
         result = self.ok(self.launch("up"))
         self.assertIn("Creating gateway: finished with status 0", result.stderr)
         self.assertIn("Creating GUI container: finished with status 0", result.stderr)
+        self.assertLess(result.stderr.index("GUI container timezone: America/Chicago\n"),
+                        result.stderr.index("Starting gateway: finished with status 0"))
+        self.assertLess(result.stderr.index("GUI container timezone: America/Chicago\n"),
+                        result.stderr.index("Starting Wayland/WSLg session: finished with status 0"))
         create = next(c for c in self.data()["calls"]
                       if c[0] == "create" and "hm-gui" in c)
         self.assertIn(f"type=bind,src={self.root / 'wayland'},dst=/run/host-wayland,ro=true", create)

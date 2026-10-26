@@ -8,7 +8,7 @@ let
   cfg = config.programs.gui-container;
   image = import ./gui-container/image.nix {
     inherit pkgs lib;
-    inherit (cfg) packages browserProfiles;
+    inherit (cfg) packages browserProfiles browserPolicies timeZone;
     gpu = cfg.graphics.autoDetect || cfg.graphics.renderDevice != null;
   };
   gateway = import ./container-gateway.nix {
@@ -32,6 +32,8 @@ let
       export GUI_PODMAN=${lib.escapeShellArg cfg.podmanExecutable}
       export GUI_STATE=${lib.escapeShellArg cfg.stateDirectory}
       export GUI_SHARED=${lib.escapeShellArg cfg.sharedDirectory}
+      export GUI_TIME_ZONE=${lib.escapeShellArg cfg.timeZone}
+      export GUI_BROWSER_PROFILES=${lib.escapeShellArg (lib.concatStringsSep " " (builtins.attrNames cfg.browserProfiles))}
       export GUI_IMAGE=${image}
       export GUI_IMAGE_REF=${image.imageName}:${image.imageTag}
       export GUI_GATEWAY_IMAGE=${gateway}
@@ -90,6 +92,12 @@ in
   ];
   options.programs.gui-container = {
     enable = lib.mkEnableOption "container applications on host Wayland/WSLg with fail-closed Mihomo US egress";
+    timeZone = lib.mkOption {
+      type = lib.types.strMatching "[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*";
+      default = "UTC";
+      example = "America/Chicago";
+      description = "IANA time zone for container applications, independent of the host. Uses tzdata for daylight-saving transitions and is printed on stderr before startup.";
+    };
     flakeOutput = lib.mkOption {
       type = lib.types.str;
       default = "gcnt";
@@ -123,13 +131,31 @@ in
       example = lib.literalExpression "[ pkgs.gimp pkgs.gedit ]";
       description = "Extra programs in the immutable image, in addition to Firefox, Brave, Google Chrome, Thunar and foot. Rebuild Home Manager to update; no host Nix store or daemon is shared.";
     };
+    browserPolicies = lib.mkOption {
+      default = { };
+      description = ''
+        Container-only enterprise policies for all default and named browser profiles.
+        Firefox policies are embedded in its wrapper; Brave and Chrome policies are
+        installed in their managed Linux policy directories. These settings do not
+        affect host browsers. Mandatory policies may prevent per-profile overrides.
+      '';
+      type = lib.types.submodule {
+        options = lib.genAttrs [ "firefox" "brave" "chrome" ] (browser: lib.mkOption {
+          type = lib.types.attrsOf (pkgs.formats.json { }).type;
+          default = { };
+          description = "Enterprise policies for container ${browser}, as a JSON object.";
+        });
+      };
+    };
     browserProfiles = lib.mkOption {
       default = { };
       description = ''
         Container-only browser profiles and host desktop launchers. Attribute names
-        identify persistent directories and gcnt-profile-NAME commands; do not
-        rename them to change a launcher label. Default Firefox/Brave/Chrome launchers
-        and their existing default profiles remain available.
+        identify persistent directories, gcnt NAME shortcuts and gcnt-profile-NAME
+        commands; do not rename them to change a launcher label. Built-in CLI commands
+        take precedence over profile names; colliding profiles remain accessible via
+        gcnt exec gcnt-profile-NAME. Default Firefox/Brave/Chrome launchers and their
+        existing default profiles remain available.
       '';
       type = lib.types.attrsOf (
         lib.types.submodule (

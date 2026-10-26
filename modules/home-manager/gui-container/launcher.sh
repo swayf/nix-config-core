@@ -9,13 +9,24 @@ fi
 command=${1:-up}
 if (( $# )); then shift; fi
 usage() {
-  echo 'Usage: gcnt {up|down|rebuild|update|shell|firefox [ARG...]|brave [ARG...]|chrome [ARG...]|exec COMMAND...|status|stats|logs|doctor|check|help}'
+  echo 'Usage: gcnt {up|down|rebuild|update|shell|firefox [ARG...]|brave [ARG...]|chrome [ARG...]|PROFILE [ARG...]|exec COMMAND...|status|stats|logs|doctor|check|help}'
 }
 case "$command" in
   up|down|rebuild|update|status|stats|logs|doctor|check|shell|help|--help|-h) (( $# == 0 )) || { echo "Unexpected arguments for $command" >&2; exit 2; } ;;
   exec) (( $# )) || { echo 'Usage: gcnt exec COMMAND [ARG...]' >&2; exit 2; } ;;
   firefox|brave|chrome) set -- "$command" "$@"; command='exec' ;;
-  *) usage >&2; exit 2 ;;
+  *)
+    # Only declared profiles are shortcuts; never execute arbitrary command names.
+    IFS=' ' read -r -a browser_profiles <<< "${GUI_BROWSER_PROFILES:-}"
+    for profile in "${browser_profiles[@]}"; do
+      if [[ $command == "$profile" ]]; then
+        set -- "gcnt-profile-$command" "$@"
+        command='exec'
+        break
+      fi
+    done
+    [[ $command == exec ]] || { usage >&2; exit 2; }
+    ;;
 esac
 # Help/update need neither a desktop, Podman nor the lifecycle lock.
 case "$command" in
@@ -27,11 +38,15 @@ case "$command" in
       '  update   Update checkout nixpkgs lock only; rebuild afterwards.' \
       '  shell    Open Bash with GUI access; no browser is started automatically.' \
       '  exec     Run an application as a host Wayland/WSLg window, or any command.' \
-      '  firefox/brave/chrome [ARG...]  Launch a browser; equivalent to exec BROWSER.' \
+      '  firefox/brave/chrome [ARG...]  Launch a browser with its default profile.' \
+      '  PROFILE [ARG...]  Launch a declared browser profile; built-in commands take precedence.' \
       '  down     Remove containers, not persistent data.' \
       '  status/stats/logs  Inspect containers, CPU/RAM or logs.' \
       '  doctor/check      Check host prerequisites or US egress.' \
       '  All except help/update clean stopped gcnt containers and unused old gcnt images.'
+    if [[ -n ${GUI_BROWSER_PROFILES:-} ]]; then
+      printf '  Profiles: %s\n' "$GUI_BROWSER_PROFILES"
+    fi
     exit 0
     ;;
   update)
@@ -200,6 +215,7 @@ cleanup_unused() {
   prune_old_images
 }
 up() {
+  printf 'GUI container timezone: %s\n' "${GUI_TIME_ZONE:?Missing configured container timezone}" >&2
   : "${XDG_RUNTIME_DIR:?Run from a logged-in Wayland desktop}"
   local wayland_socket pulse_socket='' session_spec ready=false
   if [[ -n ${GUI_WAYLAND_SOCKET:-} ]]; then

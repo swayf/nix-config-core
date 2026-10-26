@@ -16,11 +16,56 @@ let
   disabled = mk false null;
   missing = mk true null;
   c = enabled.config;
+  zoned = enabled.extendModules {
+    modules = [ { programs.gui-container.timeZone = "America/Chicago"; } ];
+  };
+  profiled = enabled.extendModules {
+    modules = [ {
+      programs.gui-container.browserProfiles = {
+        firefox-personal.browser = "firefox";
+        chrome-work.browser = "chrome";
+      };
+    } ];
+  };
+  protected = profiled.extendModules {
+    modules = [ {
+      programs.gui-container.browserPolicies = {
+        firefox.Preferences."privacy.resistFingerprinting" = { Value = true; Status = "locked"; };
+        brave.DefaultBraveFingerprintingV2Setting = 3;
+        chrome.BlockThirdPartyCookies = true;
+      };
+    } ];
+  };
+  applications = policies: import ../modules/home-manager/gui-container/applications.nix {
+    inherit pkgs lib;
+    browserProfiles = profiled.config.programs.gui-container.browserProfiles;
+    firefoxPolicies = policies;
+  };
+  protectedApps = applications protected.config.programs.gui-container.browserPolicies.firefox;
+  launcher = h: lib.findFirst (p: (p.name or "") == "gui-container") null h.config.home.packages;
   failures = h: map (a: a.message) (lib.filter (a: !a.assertion) h.config.assertions);
   result = {
     callerIdentity = c.home.username == "alice" && c.home.homeDirectory == "/srv/alice";
     gui = c.programs.gui-container.enable && !c.programs.gui-container.graphics.autoDetect
-      && c.programs.gui-container.graphics.renderDevice == null && !c.programs.gui-container.audio.enable;
+      && c.programs.gui-container.graphics.renderDevice == null && !c.programs.gui-container.audio.enable
+      && c.programs.gui-container.timeZone == "UTC"
+      && zoned.config.programs.gui-container.timeZone == "America/Chicago"
+      && lib.hasInfix "export GUI_TIME_ZONE=${lib.escapeShellArg "UTC"}\n" (launcher enabled).text
+      && lib.hasInfix "export GUI_TIME_ZONE=${lib.escapeShellArg "America/Chicago"}\n" (launcher zoned).text
+      && lib.hasInfix "GUI container timezone: %s" (launcher zoned).text
+      && lib.hasInfix "export GUI_BROWSER_PROFILES=${lib.escapeShellArg ""}\n" (launcher enabled).text
+      && lib.hasInfix "export GUI_BROWSER_PROFILES=${lib.escapeShellArg "chrome-work firefox-personal"}\n" (launcher profiled).text
+      && zoned.config.programs.gui-container.image.drvPath != c.programs.gui-container.image.drvPath
+      && c.programs.gui-container.browserPolicies == { firefox = { }; brave = { }; chrome = { }; }
+      && protected.config.programs.gui-container.browserPolicies.firefox.Preferences."privacy.resistFingerprinting"
+        == { Value = true; Status = "locked"; }
+      && protected.config.programs.gui-container.browserPolicies.brave.DefaultBraveFingerprintingV2Setting == 3
+      && protected.config.programs.gui-container.browserPolicies.chrome.BlockThirdPartyCookies
+      && (applications { }).firefox.drvPath == pkgs.firefox.drvPath
+      && protectedApps.firefox.drvPath != pkgs.firefox.drvPath
+      && lib.hasInfix (builtins.unsafeDiscardStringContext "exec ${protectedApps.firefox}/bin/firefox")
+        protectedApps.profileLaunchers.firefox-personal.text
+      && protected.config.programs.gui-container.image.drvPath != profiled.config.programs.gui-container.image.drvPath;
     proxy = c.services.mihomo.us.enable && !c.services.mihomo.direct.enable
       && c.services.mihomo.us.listen == "127.0.0.1";
     device = builtins.attrNames c.sops.secrets == [ "mhnodes" ]

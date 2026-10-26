@@ -4,7 +4,10 @@
   packages,
   gpu,
   browserProfiles ? { },
+  browserPolicies ? { firefox = { }; brave = { }; chrome = { }; },
+  timeZone ? "UTC",
 }:
+assert builtins.match "[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*" timeZone != null;
 let
   # Keep UTF-8 English/Russian without shipping the full locale archive.
   locales = pkgs.glibcLocales.override {
@@ -33,6 +36,7 @@ let
   };
   applications = import ./applications.nix {
     inherit pkgs lib browserProfiles;
+    firefoxPolicies = browserPolicies.firefox;
   };
   execApp = pkgs.writeShellScript "gui-exec" (builtins.readFile ./exec.sh);
   session = pkgs.writeShellScript "gui-session" (builtins.readFile ./session.sh);
@@ -50,6 +54,16 @@ let
   '';
   etc = pkgs.runCommand "gui-container-etc" { } ''
     mkdir -p "$out/etc/ssl/certs" "$out/etc/xdg/foot"
+    ${lib.optionalString (browserPolicies.brave != { }) ''
+      mkdir -p "$out/etc/brave/policies/managed"
+      cp ${pkgs.writeText "gcnt-brave-policies.json" (builtins.toJSON browserPolicies.brave)} \
+        "$out/etc/brave/policies/managed/gcnt.json"
+    ''}
+    ${lib.optionalString (browserPolicies.chrome != { }) ''
+      mkdir -p "$out/etc/opt/chrome/policies/managed"
+      cp ${pkgs.writeText "gcnt-chrome-policies.json" (builtins.toJSON browserPolicies.chrome)} \
+        "$out/etc/opt/chrome/policies/managed/gcnt.json"
+    ''}
     # Container defaults only; persistent user mimeapps.list can override these.
     cat > "$out/etc/xdg/mimeapps.list" <<'EOF'
     [Default Applications]
@@ -65,6 +79,9 @@ let
     printf 'root:x:0:0:root:/root:/bin/bash\ngui:x:1000:1000:GUI:/home/gui:/bin/bash\nnobody:x:65534:65534:nobody:/var/empty:/bin/false\n' > "$out/etc/passwd"
     printf 'root:x:0:\ngui:x:1000:\nnogroup:x:65534:\n' > "$out/etc/group"
     echo 'hosts: files dns' > "$out/etc/nsswitch.conf"
+    test -f ${pkgs.tzdata}/share/zoneinfo/${timeZone}
+    ln -s ${pkgs.tzdata}/share/zoneinfo/${timeZone} "$out/etc/localtime"
+    echo ${timeZone} > "$out/etc/timezone"
     ln -s ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt "$out/etc/ssl/certs/ca-certificates.crt"
   '';
   root = pkgs.buildEnv {
@@ -74,7 +91,7 @@ let
       ++ applications.packages
       ++ [
         (lib.hiPrio etc)
-        pkgs.firefox
+        applications.firefox
         pkgs.brave
         pkgs.google-chrome
         pkgs.foot
@@ -148,6 +165,8 @@ pkgs.dockerTools.streamLayeredImage {
       "XDG_DATA_DIRS=/share"
       "XDG_CONFIG_DIRS=/etc/xdg"
       "LANG=en_US.UTF-8"
+      "TZ=${timeZone}"
+      "TZDIR=${pkgs.tzdata}/share/zoneinfo"
       "LOCALE_ARCHIVE=${locales}/lib/locale/locale-archive"
       "FONTCONFIG_FILE=${fonts}"
       "MOZ_ENABLE_WAYLAND=1"

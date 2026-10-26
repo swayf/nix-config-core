@@ -15,6 +15,11 @@ in
       default = "${config.home.homeDirectory}/.config/home-manager";
       description = "Home Manager checkout used by hm; overridden at runtime by HM_FLAKE.";
     };
+    coreFlakePath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Optional local core checkout used by hm; HM_CORE_FLAKE overrides it, including an empty value to disable it.";
+    };
     profile = lib.mkOption {
       type = lib.types.str;
       default = config.home.username;
@@ -36,7 +41,8 @@ in
           profile=${lib.escapeShellArg cfg.profile}
           flake="''${HM_FLAKE:-$flake}"
           profile="''${HM_PROFILE:-$profile}"
-          core_flake="''${HM_CORE_FLAKE:-}"
+          core_flake=${lib.escapeShellArg (if cfg.coreFlakePath == null then "" else cfg.coreFlakePath)}
+          core_flake="''${HM_CORE_FLAKE-$core_flake}"
           core_args=()
 
           # Git transport includes tracked dirty files but excludes ignored secrets.

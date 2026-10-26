@@ -2,8 +2,11 @@
   pkgs,
   lib,
   browserProfiles,
+  firefoxPolicies ? { },
 }:
 let
+  firefox = if firefoxPolicies == { } then pkgs.firefox else
+    pkgs.firefox.override { extraPolicies = firefoxPolicies; };
   brave = pkgs.writeShellScriptBin "brave" ''
     exec ${pkgs.brave}/bin/brave --ozone-platform=wayland "$@"
   '';
@@ -56,7 +59,7 @@ let
             cp ${preferences} "$temporary"
             mv -f -- "$temporary" "$profile/user.js"
             trap - EXIT
-            exec ${pkgs.firefox}/bin/firefox ${lib.escapeShellArgs profile.extraArgs} \
+            exec ${firefox}/bin/firefox ${lib.escapeShellArgs profile.extraArgs} \
               --no-remote --profile "$profile" "$@"
           ''
         else
@@ -69,6 +72,6 @@ let
   ) browserProfiles;
 in
 {
-  inherit brave chrome profileLaunchers resetChromiumLocks;
+  inherit firefox brave chrome profileLaunchers resetChromiumLocks;
   packages = [ (lib.hiPrio brave) chrome ] ++ builtins.attrValues profileLaunchers;
 }

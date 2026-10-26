@@ -155,12 +155,14 @@ workspace-relative Nix options expression also uses `desktop.homeOutput`.
 
 `lib.mkDesktopShellTools { inherit pkgs lib environment nixodooFlake; }` returns
 clip, preview, pdf_opti, snap-clean, nxd and vless-qr packages without executing
-them. `shell-hm` declares `programs.hm.profile/flakePath`; the caller selects its
-profile. Personal aliases, SSH/VPS wrappers and nxd completion policy stay outside
+them. `shell-hm` declares `programs.hm.profile/flakePath/coreFlakePath`; the caller selects its
+profile and optional local core checkout (`coreFlakePath` defaults to `null`). Personal aliases, SSH/VPS wrappers and nxd completion policy stay outside
 these modules.
 
-`HM_CORE_FLAKE` включает локальную работу с core в `hm`: это путь к отдельному
-корню Git checkout с `flake.nix`, без личного default внутри core. `build`,
+`programs.hm.coreFlakePath` задаёт встроенный default локального core для `hm`:
+путь к отдельному корню Git checkout с `flake.nix`, без личного default внутри core.
+Незаданный `HM_CORE_FLAKE` сохраняет этот default; заданный переопределяет путь,
+а пустой явно отключает локальный core. `build`,
 `news`, `switch` и будущая сборка в `diff-closures` передают локальный Git input через
 `--override-input core ... --no-write-lock-file`; публичный lock не переписывается.
 Используются и незакоммиченные изменения tracked-файлов; новые файлы сначала
@@ -170,7 +172,7 @@ these modules.
 в том же порядке с одним сообщением, без push; теги ставятся только в HM.
 Два коммита не атомарны: ошибка HM не отменяет уже сохранённый core.
 `push` выполняет `git push --follow-tags` сначала в core, затем в HM, используя
-настройки push каждого репозитория; без `HM_CORE_FLAKE` отправляет только HM.
+настройки push каждого репозитория; без выбранного локального core отправляет только HM.
 Аргументы не принимает, index не меняет, commit и switch не выполняет.
 Отправляются также аннотированные теги, достижимые из отправляемых коммитов.
 Ошибка core останавливает отправку HM; ошибка HM не отменяет уже отправленный core.
@@ -408,7 +410,27 @@ GUI retains the dedicated HOME/shared mounts, private D-Bus/session, rootless
 Podman/crun, host Wayland socket and fail-closed gateway. Its gateway has no
 DIRECT fallback. `gui-windows-shortcuts` installs an explicitly invoked generator;
 it never creates Windows shortcuts during activation. Personal browser profiles
-and extra application packages remain caller options.
+and extra application packages remain caller options. Declared
+`programs.gui-container.browserProfiles.NAME` profiles can be launched with
+`gcnt NAME [ARG...]`; `gcnt help` lists the names. Built-in CLI commands take
+precedence, so `gcnt firefox`, `gcnt brave` and `gcnt chrome` still use their
+default profiles. The explicit `gcnt exec gcnt-profile-NAME` form remains available,
+including for profiles whose names collide with built-in commands. Unknown names
+are rejected before container preparation.
+`programs.gui-container.timeZone` selects an IANA zone (default `UTC`), independently
+of the host. The image includes tzdata-backed `/etc/localtime`, `/etc/timezone`,
+`TZ` and `TZDIR`; DST transitions follow tzdata. Startup commands print the
+configured zone on stderr, also when reusing an already-running container,
+without polluting `gcnt exec` stdout. Changing the zone changes the image and
+recreates the GUI container on the next startup, preserving its private HOME.
+`programs.gui-container.browserPolicies.{firefox,brave,chrome}` accepts JSON policy
+objects (empty by default). Firefox policies are embedded in the container-only
+wrapper shared by default and named profiles. Brave and Chrome policies are placed
+in `/etc/brave/policies/managed/gcnt.json` and
+`/etc/opt/chrome/policies/managed/gcnt.json`. Policy changes change the image;
+no host policies or profile data are rewritten. Mandatory policies can override
+per-profile preferences and disable the corresponding UI settings. Fingerprinting
+protection is browser-specific; blocking third-party cookies is not Firefox RFP.
 
 `homeManagerModules.wsl-gui-device` is a separate bounded integrated profile,
 not the existing full WSL profile. Pass the caller's `sopsModule` and
