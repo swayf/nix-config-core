@@ -38,6 +38,11 @@ let
     port = if cfg.proxy.port == null then 0 else cfg.proxy.port;
     inherit (cfg.proxy) directPort;
   };
+  # xdg-open/gio can exit before their browser children. Keep the transient
+  # unit alive until its entire cgroup exits, without changing the guest shim.
+  webLinkRunner = pkgs.writeShellScriptBin "systemd-run" ''
+    exec ${pkgs.systemd}/bin/systemd-run --property=ExitType=cgroup "$@"
+  '';
   launcher = pkgs.writeShellApplication {
     name = "agents";
     runtimeInputs = [
@@ -338,7 +343,7 @@ in
           "${pkgs.python3}/bin/python3" "-B"
           "${./agents-container/web-links.py}" "serve"
           "%t/agents-web-links/socket"
-          "${pkgs.systemd}/bin/systemd-run"
+          "${webLinkRunner}/bin/systemd-run"
           "${pkgs.xdg-utils}/bin/xdg-open"
         ];
         RuntimeDirectory = "agents-web-links";

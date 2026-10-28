@@ -58,6 +58,16 @@ class AgentsDependencies(unittest.TestCase):
         self.assertIn("dst=/run/agents-secret-environment,ro=true", work)
         self.assertIn("dst=/run/agents-nix-auth,ro=true", work)
 
+    def test_host_browser_runner_tracks_children_without_changing_guest(self):
+        module = (HM / "agents-container.nix").read_text()
+        self.assertIn('exec ${pkgs.systemd}/bin/systemd-run --property=ExitType=cgroup "$@"', module)
+        unit = module.split("systemd.user.services.agents-web-links =", 1)[1]
+        self.assertIn('"${webLinkRunner}/bin/systemd-run"', unit)
+        for token in ("KillMode=none", "KillMode=process", "--setenv=PATH"):
+            self.assertNotIn(token, module)
+        helper = (HM / "agents-container/web-links.py").read_text()
+        self.assertNotIn("ExitType=", helper)
+
     def test_entrypoint_order_and_no_auto_start(self):
         image = (HM / "agents-container/image.nix").read_text()
         entry = image.split('entrypoint = pkgs.writeShellScript', 1)[1]

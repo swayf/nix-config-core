@@ -111,6 +111,7 @@ let
       unit.Service.RuntimeDirectoryMode == "0700"
       && unit.Service.RuntimeDirectoryPreserve == "yes"
       && lib.hasInfix "/bin/systemd-run" command
+      && !lib.hasInfix (builtins.unsafeDiscardStringContext "${pkgs.systemd}/bin/systemd-run") command
       && lib.hasInfix "/bin/xdg-open" command
       && !(unit ? Install);
     webLinkToggleChangesSpec = minimal.config.services.agents-container.runtimeSpec
