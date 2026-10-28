@@ -161,6 +161,56 @@ sys.exit(status)
         self.assertEqual(self.data()["calls"], [])
         self.assertFalse((self.root / "state").exists())
 
+    def test_agent_help_without_runtime_or_lock(self):
+        env = {k: v for k, v in self.env.items() if not k.startswith("GUI_")}
+        for command in ("help", "--help", "-h"):
+            with self.subTest(command=command):
+                result = self.ok(self.launch(command, env=env))
+                for text in (
+                    "gcnt exec antigravity                 Antigravity App",
+                    "gcnt exec antigravity-ide [OPTIONS] [PATH...]",
+                    "gcnt exec chatgpt                     ChatGPT: choose Work or Codex in the app.",
+                    "programs.gui-container.packages; they are not bundled by default",
+                    "Arguments after PROGRAM are passed unchanged",
+                    "/shared/PROJECT maps to sharedDirectory/PROJECT",
+                    "not App/ChatGPT options",
+                    "-n, --new-window", "-r, --reuse-window",
+                    "-g, --goto FILE:LINE[:COLUMN]", "-d, --diff FILE1 FILE2",
+                    "-w, --wait", "--profile NAME", "-v, --version", "-h, --help",
+                    "gcnt exec antigravity-ide --new-window /shared/my-project",
+                    "gcnt exec antigravity-ide --help",
+                    "exec commands may prepare/start the container",
+                ):
+                    self.assertIn(text, result.stdout)
+                self.assertNotIn("--no-sandbox", result.stdout)
+                self.assertEqual(result.stderr, "")
+        self.assertEqual(self.data()["calls"], [])
+        self.assertFalse((self.root / "state").exists())
+
+    def test_agent_exec_preserves_application_arguments(self):
+        cases = (
+            ("antigravity",),
+            ("chatgpt",),
+            ("antigravity-ide", "--new-window", "/shared/my project"),
+            ("antigravity-ide", "--goto", "/shared/my project/main.py:42:1"),
+            ("antigravity-ide", "--diff", "/shared/old.py", "/shared/new.py"),
+            ("antigravity-ide", "--profile", "Work settings", "--wait", "/shared/my project"),
+            ("antigravity-ide", "--help"),
+            ("antigravity-ide", "--version"),
+            ("antigravity-ide", "", "$(touch marker)"),
+        )
+        for args in cases:
+            with self.subTest(args=args):
+                self.cleanup_fixture(running=True)
+                result = self.ok(self.launch("exec", *args))
+                self.assertEqual(self.data()["calls"][-1], [
+                    "exec", "-i", "--user=1000:1000", "hm-gui", "/opt/gui/exec", *args,
+                ])
+                self.assertEqual(result.stdout, "command output\n")
+                self.assertFalse((self.root / "marker").exists())
+                self.assertFalse(any(c[0] in ("rm", "create", "start", "load")
+                                     for c in self.data()["calls"]))
+
     def test_invalid_arguments_do_not_touch_state(self):
         for args in (("reload",), ("unknown",), ("shell", "extra"), ("exec",), ("update", "extra")):
             self.assertEqual(self.launch(*args).returncode, 2)

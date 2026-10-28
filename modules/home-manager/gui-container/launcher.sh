@@ -66,6 +66,36 @@ case "$command" in
     if [[ -n ${GUI_BROWSER_PROFILES:-} ]]; then
       printf '  Profiles: %s\n' "$GUI_BROWSER_PROFILES"
     fi
+    printf '%s\n' \
+      '' \
+      'Applications and agents (inside the container):' \
+      '  gcnt exec antigravity                 Antigravity App: manage agents and projects.' \
+      '  gcnt exec antigravity-ide [OPTIONS] [PATH...]  Antigravity IDE: edit files/projects.' \
+      '  gcnt exec chatgpt                     ChatGPT: choose Work or Codex in the app.' \
+      '  These agent apps require programs.gui-container.packages; they are not bundled by default.' \
+      '  App/ChatGPT projects, models and agent modes are selected in their GUI, not by gcnt flags.' \
+      '  gcnt exec foot                        Open a container terminal.' \
+      '  gcnt exec thunar /shared              Open the shared folder.' \
+      '  gcnt exec PROGRAM [ARG...]            Run any other program installed in the image.' \
+      '  Arguments after PROGRAM are passed unchanged to it; they are not gcnt options.' \
+      '  Use container paths: /shared/PROJECT maps to sharedDirectory/PROJECT on the host.' \
+      '  Host paths/dot are not translated; the host HOME is not mounted. Use /shared/PROJECT.' \
+      '' \
+      'Antigravity IDE options (after gcnt exec antigravity-ide; not App/ChatGPT options):' \
+      '  -n, --new-window                      Open a new window.' \
+      '  -r, --reuse-window                    Open in the last active window.' \
+      '  -g, --goto FILE:LINE[:COLUMN]          Open a file at a line/column.' \
+      '  -d, --diff FILE1 FILE2                Compare two files.' \
+      '  -w, --wait                            Wait for files to be closed.' \
+      '  --profile NAME                        Use/create an IDE settings profile, not a browser profile.' \
+      '  -v, --version                         Print the installed IDE version.' \
+      '  -h, --help                            List all options supported by the installed IDE.' \
+      '' \
+      'Examples:' \
+      '  gcnt exec antigravity-ide --new-window /shared/my-project' \
+      '  gcnt exec antigravity-ide --goto /shared/my-project/main.py:42:1' \
+      '  gcnt exec antigravity-ide --help' \
+      '  gcnt help only prints this help; exec commands may prepare/start the container.'
     exit 0
     ;;
   update)

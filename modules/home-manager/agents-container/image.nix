@@ -7,6 +7,7 @@
   timeZone,
   projectDirectoryName,
   minimumFreePids ? 256,
+  webLinks ? false,
 }:
 assert builtins.match "[a-z_][a-z0-9_-]*" username != null;
 assert builtins.match "[a-z0-9][a-z0-9./_-]*" imageName != null;
@@ -14,6 +15,7 @@ assert builtins.match "[A-Za-z0-9_+/-]+" timeZone != null && !lib.hasPrefix "/" 
 assert builtins.match "[A-Za-z0-9_-]+" projectDirectoryName != null;
 let
   home = "/home/${username}";
+  buildUsers = lib.range 1 16;
   # libcap headers enable shadow's setuid-to-caller + keep-capabilities path.
   # Without it, newuidmap stays euid 0 and requires SYS_ADMIN over the child's
   # namespace. We deliberately do not grant SYS_ADMIN to the workspace.
@@ -32,6 +34,12 @@ let
       "/share"
     ];
   };
+  # Podman's default init would retain the same ambient UID-changing caps as
+  # the original entrypoint. Clear them before PID 1 as well as before sessions.
+  init = pkgs.writeShellScript "agents-init" ''
+    exec ${pkgs.util-linux}/bin/setpriv --inh-caps=-all --ambient-caps=-all \
+      ${pkgs.catatonit}/bin/catatonit "$@"
+  '';
   sessionEntrypoint = pkgs.writeShellScript "agents-session" ''
     set -euo pipefail
     mkdir -p "$XDG_RUNTIME_DIR" "$HOME/.local/bin"
@@ -49,7 +57,10 @@ let
     set -euo pipefail
     source ${./process-preflight.sh}
     agents_process_preflight ${toString minimumFreePids}
-    exec ${pkgs.python3}/bin/python3 ${./secret-environment.py} exec \
+    # Keep SETUID/SETGID only in the bounding set for newuidmap/newgidmap.
+    # Ambient capabilities on the agent would let it impersonate daemon root.
+    exec ${pkgs.util-linux}/bin/setpriv --inh-caps=-all --ambient-caps=-all \
+      ${pkgs.python3}/bin/python3 ${./secret-environment.py} exec \
       /run/agents-secret-environment/environment.json ${sessionEntrypoint} "$@"
   '';
   clipboard = pkgs.runCommand "agents-clipboard-tools" { } ''
@@ -71,17 +82,25 @@ let
     EOF
     chmod +x "$out/bin/clip"
   '';
+  webLinkOpener = pkgs.writeShellApplication {
+    name = "xdg-open";
+    text = ''
+      exec ${pkgs.python3}/bin/python3 -B ${./web-links.py} open "$@"
+    '';
+  };
   etc = pkgs.runCommand "agents-etc" { } ''
     mkdir -p "$out/etc/containers" "$out/etc/nix" "$out/etc/ssl/certs"
     cat > "$out/etc/passwd" <<'EOF'
     root:x:0:0:root:/root:/bin/bash
     ${username}:x:1000:1000:Developer:${home}:/bin/bash
     nobody:x:65534:65534:nobody:/var/empty:/bin/false
+    ${lib.concatMapStringsSep "\n" (n: "nixbld${toString n}:x:${toString (30000 + n)}:30000:Nix build user:/var/empty:/bin/false") buildUsers}
     EOF
     cat > "$out/etc/group" <<'EOF'
     root:x:0:
     ${username}:x:1000:
     nogroup:x:65534:
+    nixbld:x:30000:${lib.concatMapStringsSep "," (n: "nixbld${toString n}") buildUsers}
     EOF
     # The outer keep-id namespace has 65537 IDs (host user + 65536 subuids).
     # Exclude root 0 and developer 1000; the remaining 65535 plus the developer
@@ -97,7 +116,9 @@ let
     ln -s ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt "$out/etc/ssl/certs/ca-certificates.crt"
     cat > "$out/etc/nix/nix.conf" <<'EOF'
     experimental-features = nix-command flakes
-    build-users-group =
+    build-users-group = nixbld
+    allowed-users = ${username}
+    trusted-users = root
     sandbox = false
     accept-flake-config = false
     !include /run/agents-nix-auth/access-tokens.conf
@@ -159,7 +180,7 @@ let
       pkgs.cacert
       pkgs.tzdata
       pkgs.strace
-    ];
+    ] ++ lib.optional webLinks webLinkOpener;
     pathsToLink = [
       "/bin"
       "/etc"
@@ -169,6 +190,7 @@ let
     postBuild = ''
       mkdir -p "$out/opt/agents" "$out/run"
       ln -s ${entrypoint} "$out/opt/agents/entrypoint"
+      ln -s ${init} "$out/opt/agents/init"
       ln -s ${graphics} "$out/run/opengl-driver"
     '';
   };
@@ -212,7 +234,7 @@ let
         "USER=${username}"
         "PATH=${home}/.nix-profile/bin:${home}/.local/bin:/run/wrappers/bin:/bin"
         "XDG_RUNTIME_DIR=/tmp/runtime-1000"
-        "NIX_REMOTE=local"
+        "NIX_REMOTE=daemon"
         "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
         "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
         "TERM=xterm-256color"
@@ -226,5 +248,5 @@ let
   };
 in
 {
-  inherit image root;
+  inherit image root init;
 }

@@ -1,7 +1,9 @@
 """Exercise the real shell preflight and image entrypoint without a container."""
 
 from pathlib import Path
+import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -113,13 +115,18 @@ class ProcessPreflightTest(unittest.TestCase):
         fragment = source.split('entrypoint = pkgs.writeShellScript "agents-entrypoint" \'\'\n', 1)[1].split("\n  '';", 1)[0]
         dispatcher = self.base / "secret-dispatcher"
         called = self.base / "called"
-        dispatcher.write_text('#!/bin/bash\nprintf "called\\n" > "$TEST_CALLED"\n')
+        dispatcher.write_text('''#!/bin/bash
+while IFS= read -r line; do
+  case "$line" in CapInh:*|CapPrm:*|CapEff:*|CapBnd:*|CapAmb:*) printf '%s\\n' "$line" ;; esac
+done < /proc/self/status > "$TEST_CALLED"
+''')
         dispatcher.chmod(0o755)
         fragment = fragment.replace("${pkgs.python3}/bin/python3", str(dispatcher)).replace(
             "${./secret-environment.py}", "secret-helper").replace(
             "${sessionEntrypoint}", "session-helper").replace(
             "${./process-preflight.sh}", str(self.helper)).replace(
-            "${toString minimumFreePids}", "256")
+            "${toString minimumFreePids}", "256").replace(
+            "${pkgs.util-linux}/bin/setpriv", shutil.which("setpriv"))
         fragment = fragment.replace("agents_process_preflight 256",
                                     f'agents_process_preflight 256 "{self.cgroup}"')
         result = subprocess.run(
@@ -144,6 +151,33 @@ class ProcessPreflightTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return receipt
 
+    def test_custom_init_drops_capabilities_before_reaper(self):
+        source = (ROOT / "image.nix").read_text()
+        fragment = source.split('init = pkgs.writeShellScript "agents-init" \'\'\n', 1)[1].split("\n  '';", 1)[0]
+        reaper = self.base / "reaper"
+        called = self.base / "reaper-called.json"
+        reaper.write_text('''#!/usr/bin/env python3
+from pathlib import Path
+import json, os, sys
+caps = {line.split(":", 1)[0]: line.split(":", 1)[1].strip()
+        for line in Path("/proc/self/status").read_text().splitlines() if line.startswith("Cap")}
+Path(os.environ["TEST_CALLED"]).write_text(json.dumps({"caps": caps, "args": sys.argv[1:]}))
+''')
+        reaper.chmod(0o755)
+        fragment = fragment.replace("${pkgs.util-linux}/bin/setpriv", shutil.which("setpriv")).replace(
+            "${pkgs.catatonit}/bin/catatonit", str(reaper))
+        args = ["-P", "--", "/opt/agents/entrypoint", "/bin/sleep", "infinity"]
+        result = subprocess.run(["bash", "-euo", "pipefail", "-c", fragment, "init-test", *args],
+                                env=dict(os.environ, TEST_CALLED=str(called)),
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(called.read_text())
+        self.assertEqual(data["args"], args)
+        for name in ("CapInh", "CapPrm", "CapEff", "CapAmb"):
+            self.assertEqual(int(data["caps"][name], 16), 0, name)
+        parent = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines())
+        self.assertEqual(data["caps"]["CapBnd"], parent["CapBnd"].strip())
+
     def test_initial_lifetime_command_publishes_ready_receipt(self):
         self.assertTrue(self.session_receipt("/bin/sleep", "infinity").exists())
 
@@ -155,10 +189,14 @@ class ProcessPreflightTest(unittest.TestCase):
         self.assertEqual(result.returncode, 75, result.stderr)
         self.assertFalse(called.exists())
 
-    def test_healthy_entrypoint_dispatches(self):
+    def test_healthy_entrypoint_dispatches_without_usable_uid_capabilities(self):
         result, called = self.entrypoint("100")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(called.exists())
+        capabilities = dict(line.split(":", 1) for line in called.read_text().splitlines())
+        for name in ("CapInh", "CapPrm", "CapEff", "CapAmb"):
+            self.assertEqual(int(capabilities[name].strip(), 16), 0, name)
+        parent = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines())
+        self.assertEqual(capabilities["CapBnd"], parent["CapBnd"])
 
 
 if __name__ == "__main__":

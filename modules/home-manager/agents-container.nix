@@ -27,6 +27,7 @@ let
     inherit pkgs lib;
     username = config.home.username;
     inherit (cfg) minimumFreePids imageName timeZone projectDirectoryName;
+    webLinks = cfg.webLinks.enable;
     software = if cfg.software == null then {
       packages = []; environment = {}; etcFiles = {}; homeInit = "";
     } else cfg.software;
@@ -56,17 +57,20 @@ let
       }
       export AGENTS_CLIPBOARD=${if cfg.clipboard.enable then "1" else "0"}
       export AGENTS_SOUND=${if cfg.sound.enable then "1" else "0"}
+      export AGENTS_WEB_LINKS=${if cfg.webLinks.enable then "1" else "0"}
       export AGENTS_KVM=${if cfg.kvm.enable then "1" else "0"}
       export AGENTS_FLAKE_OUTPUT=${lib.escapeShellArg cfg.flakeOutput}
       export AGENTS_PODMAN=${lib.escapeShellArg cfg.podmanExecutable}
       export AGENTS_STATE=${lib.escapeShellArg cfg.stateDirectory}
       export AGENTS_PROJECTS=${lib.escapeShellArg cfg.sharedDirectory}
       export AGENTS_HOME=${lib.escapeShellArg "/home/${config.home.username}"}
+      export AGENTS_USER=${lib.escapeShellArg config.home.username}
       export AGENTS_IMAGE=${work.image}
       export AGENTS_IMAGE_REF=${work.image.imageName}:${work.image.imageTag}
       export AGENTS_GATEWAY_IMAGE=${gateway}
       export AGENTS_GATEWAY_REF=${gateway.imageName}:${gateway.imageTag}
       export AGENTS_ROOT=${work.root}
+      export AGENTS_INIT=${work.init}
       export AGENTS_DEVICES=${lib.escapeShellArg (lib.concatStringsSep ":" cfg.gpuDevices)}
       export AGENTS_PROXY=${lib.escapeShellArg (if cfg.proxy.httpProxy == null then "" else cfg.proxy.httpProxy)}
       export AGENTS_SPEC=${cfg.runtimeSpec}
@@ -94,6 +98,12 @@ in
     gatewayImageName = lib.mkOption { type = lib.types.strMatching "[a-z0-9][a-z0-9./_-]*"; default = "localhost/agents-gateway"; };
     workspaceName = lib.mkOption { type = lib.types.strMatching "[A-Za-z0-9_-]+"; default = "agents-workspace"; };
     gatewayName = lib.mkOption { type = lib.types.strMatching "[A-Za-z0-9_-]+"; default = "agents-workspace-gateway"; };
+    nixDaemonName = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      default = "${cfg.workspaceName}-nix";
+      description = "Private daemon sidecar name; the workspace has a read-only store.";
+    };
     projectDirectoryName = lib.mkOption { type = lib.types.strMatching "[A-Za-z0-9_-]+"; default = "projects"; };
     timeZone = lib.mkOption { type = lib.types.str; default = "UTC"; };
     shellCommand = lib.mkOption { type = lib.types.strMatching "[A-Za-z0-9_./-]+"; default = "bash"; };
@@ -111,6 +121,7 @@ in
         inherit (cfg) sharedDirectory stateDirectory gpuDevices kvm clipboard
           nixAccessTokensFile secretSources proxy;
         sound.enable = cfg.sound.enable;
+        webLinks.enable = cfg.webLinks.enable;
         username = config.home.username;
         launcher = launcherText;
       });
@@ -185,6 +196,12 @@ in
       default = null;
       description = "Absolute host Wayland socket for the clipboard broker; null uses the session environment. No display socket is mounted in the workspace.";
     };
+    webLinks.enable = lib.mkEnableOption ''an HTTP(S)-only host browser bridge.
+      Installs an xdg-open shim in the workspace and exposes only a dedicated
+      Unix socket, never host display/D-Bus sockets. Requests from any workspace
+      process can open the host user's default browser; local files, other URI
+      schemes and embedded credentials are refused. Limited to one request per
+      second and twenty per minute. Disabled by default on headless callers'';
     sound = {
       enable = lib.mkEnableOption "a playback-only host sound broker (no microphone/audio socket in the container)";
       events = lib.mkOption {
@@ -299,6 +316,24 @@ in
           "${pkgs.pulseaudio}/bin/paplay"
         ];
         RuntimeDirectory = "agents-sound";
+        RuntimeDirectoryMode = "0700";
+        RuntimeDirectoryPreserve = "yes";
+        UMask = "0077";
+        NoNewPrivileges = true;
+        Restart = "on-failure";
+      };
+    };
+    systemd.user.services.agents-web-links = lib.mkIf cfg.webLinks.enable {
+      Unit.Description = "HTTP(S)-only host browser bridge for the agents workspace";
+      Service = {
+        ExecStart = lib.escapeShellArgs [
+          "${pkgs.python3}/bin/python3" "-B"
+          "${./agents-container/web-links.py}" "serve"
+          "%t/agents-web-links/socket"
+          "${pkgs.systemd}/bin/systemd-run"
+          "${pkgs.xdg-utils}/bin/xdg-open"
+        ];
+        RuntimeDirectory = "agents-web-links";
         RuntimeDirectoryMode = "0700";
         RuntimeDirectoryPreserve = "yes";
         UMask = "0077";

@@ -266,7 +266,21 @@ s = json.loads(path.read_text())
 a = sys.argv[1:]
 s["calls"].append(a)
 status = 0
-if a[0] == "inspect":
+if a[0] == "unshare":
+    if a[1:3] == ["nix", "copy"]:
+        root = next(arg.split("local?root=", 1)[1] for arg in a if arg.startswith("local?root="))
+        (Path(root) / "nix/store").mkdir(parents=True, exist_ok=True)
+    elif a[1] in ("mkdir", "ln", "chmod"):
+        import subprocess
+        status = subprocess.run(a[1:]).returncode
+    elif a[1] == "stat":
+        print(s.get("store_owner", "1:30000"))
+    elif a[1] == "chown":
+        if a[-1].endswith("/nix/store"):
+            s["store_owner"] = a[-2]
+    else:
+        raise AssertionError(a)
+elif a[0] == "inspect":
     c = s["containers"].get(a[-1])
     if c is None:
         status = 1
@@ -307,7 +321,8 @@ elif a[0] == "create":
     if os.environ.get("TEST_FAIL_CREATE") == name:
         status = 19
     else:
-        s["containers"][name] = {"image": a[-1], "running": False, "init": "--init" in a}
+        image = next(arg for arg in a if arg in (os.environ["AGENTS_IMAGE_REF"], os.environ["AGENTS_GATEWAY_REF"]))
+        s["containers"][name] = {"image": image, "running": False, "init": "--init" in a}
 elif a[0] == "start":
     s["containers"][a[1]]["running"] = not (a[1] == "agents-dallas" and os.environ.get("TEST_REJECT_START"))
     if a[1] == "agents-dallas" and os.environ.get("TEST_PENDING_START"):
@@ -333,7 +348,9 @@ elif a[0] == "rmi":
     else:
         s["images"].remove(a[1])
 elif a[0] == "exec":
-    if a[-1] == "/tmp/agents-workspace-ready":
+    if a[-3:] == ["daemon", "store", "ping"]:
+        status = int(os.environ.get("TEST_FAIL_DAEMON_PING", "0"))
+    elif a[-1] == "/tmp/agents-workspace-ready":
         if os.environ.get("TEST_HANG_READINESS"):
             import signal
             import time
@@ -355,7 +372,8 @@ sys.exit(status)
                         AGENTS_STATE=str(self.base / "agents-state"),
                         XDG_RUNTIME_DIR=str(self.base / "runtime"),
                         AGENTS_PROJECTS=str(self.base / "projects"),
-                        AGENTS_HOME="/container-home/test", AGENTS_ROOT="/nix/store/test",
+                        AGENTS_HOME="/container-home/test", AGENTS_USER="test", AGENTS_ROOT="/nix/store/test",
+                        AGENTS_INIT="/nix/store/test-init",
                         AGENTS_IMAGE="work.tar", AGENTS_GATEWAY_IMAGE="gateway.tar",
                         AGENTS_IMAGE_REF=self.work_ref, AGENTS_GATEWAY_REF=self.gateway_ref,
                         AGENTS_CLIPBOARD="0", AGENTS_SOUND="0", AGENTS_DEVICES="", AGENTS_SPEC="test-spec",
@@ -386,7 +404,11 @@ sys.exit(status)
         self.state["containers"].update({
             "agents-dallas": {"image": self.work_ref, "running": True, "init": True},
             "agents-dallas-gateway": {"image": self.gateway_ref, "running": True},
+            "agents-dallas-nix": {"image": self.work_ref, "running": True, "init": True},
         })
+
+    def creation(self, name="agents-dallas"):
+        return next(c for c in self.state["calls"] if c[0] == "create" and c[c.index("--name") + 1] == name)
 
     def assert_cleaned(self, result):
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -475,16 +497,86 @@ sys.exit(status)
         self.assertTrue(child_file.exists())
         self.assertFalse(Path(f"/proc/{child_file.read_text()}").exists())
 
+    def test_store_is_read_only_only_in_workspace(self):
+        result = self.run_launcher("up")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        mount = f"type=bind,src={self.env['AGENTS_STATE']}/nix-root/nix,dst=/nix"
+        workspace, daemon = self.creation(), self.creation("agents-dallas-nix")
+        self.assertIn(mount + ",ro=true", workspace)
+        self.assertNotIn(mount, workspace)
+        self.assertIn(mount, daemon)
+        self.assertEqual(workspace[workspace.index("--user") + 1], "1000:1000")
+        self.assertEqual(daemon[daemon.index("--user") + 1], "0:0")
+        for directory in ("profiles", "gcroots"):
+            self.assertIn(mount.split(",dst=", 1)[0] + f"/var/nix/{directory}/per-user/test,dst=/nix/var/nix/{directory}/per-user/test", workspace)
+        self.assertFalse(any(arg.startswith("--device") for arg in daemon))
+        self.assertNotIn("--pid", daemon)
+        self.assertNotIn("--privileged", workspace + daemon)
+        self.assertIn("--entrypoint", daemon)
+        self.assertEqual(daemon[daemon.index("--entrypoint") + 1], "/bin/nix-daemon")
+        self.assertNotIn("--cap-add=SYS_ADMIN", workspace + daemon)
+        self.assertFalse(any("dst=/container-home" in arg for arg in daemon))
+        calls = self.state["calls"]
+        self.assertLess(calls.index(["start", "agents-dallas-nix"]), calls.index(self.creation()))
+
+    def test_daemon_admission_failure_never_starts_workspace(self):
+        self.env["TEST_FAIL_DAEMON_PING"] = "1"
+        result = self.run_launcher("shell")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("Private Nix daemon startup failed", result.stderr)
+        self.assertFalse(any(c[0] == "create" and c[c.index("--name") + 1] == "agents-dallas"
+                             for c in self.state["calls"]))
+        self.assertFalse(any(c[0] == "rmi" for c in self.state["calls"]))
+
+    def test_failed_daemon_ping_on_reuse_does_not_restart_or_dispatch(self):
+        self.current_containers()
+        self.env["TEST_FAIL_DAEMON_PING"] = "1"
+        result = self.run_launcher("shell")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertFalse(any(c[0] in ("create", "rm", "start", "rmi") for c in self.state["calls"]))
+        self.assertNotEqual(self.state["calls"][-1][-1], "herdr")
+
+    def test_legacy_store_refuses_even_explicit_rebuild_before_container_removal(self):
+        self.current_containers()
+        store = Path(self.env["AGENTS_STATE"]) / "nix-root/nix/store"
+        store.mkdir(parents=True)
+        result = self.run_launcher("rebuild")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("offline ownership conversion", result.stderr)
+        self.assertFalse(any(c[0] in ("create", "rm", "start", "unshare") for c in self.state["calls"]))
+
+    def test_marker_cannot_bypass_wrong_store_owner(self):
+        state = Path(self.env["AGENTS_STATE"])
+        (state / "nix-root/nix/store").mkdir(parents=True)
+        (state / "nix-daemon-layout").write_text("keep-id-root-v1\n")
+        self.state["store_owner"] = "0:0"
+        result = self.run_launcher("up")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertFalse(any(c[0] in ("create", "rm", "start") for c in self.state["calls"]))
+
+    def test_rebuild_preserves_store_layout_and_removes_daemon_before_gateway(self):
+        self.assertEqual(self.run_launcher("up").returncode, 0)
+        self.state["calls"] = []
+        result = self.run_launcher("rebuild")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        marker = Path(self.env["AGENTS_STATE"]) / "nix-daemon-layout"
+        self.assertEqual(marker.read_text(), "keep-id-root-v1\n")
+        calls = self.state["calls"]
+        removals = [c[-1] for c in calls if c[0] == "rm"]
+        self.assertEqual(removals, ["agents-dallas", "agents-dallas-nix", "agents-dallas-gateway"])
+        self.assertEqual(self.state["store_owner"], "1:30000")
+
     def test_workspace_uses_reaping_init(self):
         result = self.run_launcher("up")
         self.assertEqual(result.returncode, 0, result.stderr)
-        workspace = next(c for c in self.state["calls"] if c[0] == "create" and c[-1] == self.work_ref)
+        workspace = self.creation()
         self.assertIn("--init", workspace)
+        self.assertEqual(workspace[workspace.index("--init-path") + 1], self.env["AGENTS_INIT"])
 
     def test_workspace_process_limit(self):
         result = self.run_launcher("up")
         self.assertEqual(result.returncode, 0, result.stderr)
-        workspace = next(c for c in self.state["calls"] if c[0] == "create" and c[-1] == self.work_ref)
+        workspace = self.creation()
         self.assertIn("--pids-limit=4096", workspace)
 
     def test_running_workspace_without_init_refuses_without_restart(self):
@@ -537,8 +629,8 @@ sys.exit(status)
     def test_workspace_has_private_graphics_shared_memory(self):
         result = self.run_launcher("up")
         self.assertEqual(result.returncode, 0, result.stderr)
-        workspace = next(c for c in self.state["calls"] if c[0] == "create" and c[-1] == self.work_ref)
-        gateway = next(c for c in self.state["calls"] if c[0] == "create" and c[-1] == self.gateway_ref)
+        workspace = self.creation()
+        gateway = self.creation("agents-dallas-gateway")
         self.assertIn("--shm-size=1g", workspace)
         self.assertNotIn("--shm-size=1g", gateway)
         self.assertFalse(any(arg.startswith("--ipc") for arg in workspace + gateway))
@@ -548,7 +640,7 @@ sys.exit(status)
         self.env["AGENTS_DEVICES"] = "/dev/dri/renderD128:/dev/dri/renderD129"
         result = self.run_launcher("up")
         self.assertEqual(result.returncode, 0, result.stderr)
-        workspace = next(c for c in self.state["calls"] if c[0] == "create" and c[-1] == self.work_ref)
+        workspace = self.creation()
         for device in ("/dev/kvm", "/dev/net/tun", "/dev/fuse",
                        "/dev/dri/renderD128", "/dev/dri/renderD129"):
             self.assertIn("--device=" + device, workspace)
@@ -557,7 +649,7 @@ sys.exit(status)
         self.env["AGENTS_KVM"] = "0"
         result = self.run_launcher("up")
         self.assertEqual(result.returncode, 0, result.stderr)
-        workspace = next(c for c in self.state["calls"] if c[0] == "create" and c[-1] == self.work_ref)
+        workspace = self.creation()
         self.assertEqual({arg for arg in workspace if arg.startswith("--device=")},
                          {"--device=/dev/net/tun", "--device=/dev/fuse"})
         gateway = next(c for c in self.state["calls"] if c[0] == "create" and c[-1] == self.gateway_ref)
@@ -635,7 +727,7 @@ sys.exit(status)
     def staged_token(self):
         return Path(self.env["AGENTS_STATE"]) / "nix-auth/access-tokens.conf"
 
-    def test_nix_token_is_private_and_only_mounted_in_workspace(self):
+    def test_nix_token_is_private_and_mounted_only_in_workspace_and_daemon(self):
         source = self.token_source()
         result = self.run_launcher("up")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -645,8 +737,9 @@ sys.exit(status)
         self.assertEqual(staged.parent.stat().st_mode & 0o777, 0o700)
         mount = f"type=bind,src={staged.parent},dst=/run/agents-nix-auth,ro=true"
         calls = self.state["calls"]
-        workspace = next(c for c in calls if c[0] == "create" and c[-1] == self.work_ref)
-        gateway = next(c for c in calls if c[0] == "create" and c[-1] == self.gateway_ref)
+        workspace = self.creation()
+        gateway = self.creation("agents-dallas-gateway")
+        self.assertIn(mount, self.creation("agents-dallas-nix"))
         self.assertIn(mount, workspace)
         self.assertNotIn(mount, gateway)
         self.assertNotIn("test-secret-one", result.stdout + result.stderr + json.dumps(calls))
@@ -722,9 +815,9 @@ sys.exit(status)
         self.assertEqual(staged.stat().st_mode & 0o777, 0o600)
         self.assertEqual(staged.parent.stat().st_mode & 0o777, 0o700)
         mount = f"type=bind,src={staged.parent},dst=/run/agents-secret-environment,ro=true"
-        creates = [c for c in self.state["calls"] if c[0] == "create"]
-        self.assertIn(mount, next(c for c in creates if c[-1] == self.work_ref))
-        self.assertNotIn(mount, next(c for c in creates if c[-1] == self.gateway_ref))
+        self.assertIn(mount, self.creation())
+        self.assertNotIn(mount, self.creation("agents-dallas-nix"))
+        self.assertNotIn(mount, self.creation("agents-dallas-gateway"))
         self.assertNotIn("private-tavily-test-key", result.stdout + result.stderr + json.dumps(self.state["calls"]))
         self.assertEqual(list(staged.parent.iterdir()), [staged])
         self.assertFalse((Path(self.env["AGENTS_STATE"]) / "secret-environment").exists())
@@ -751,6 +844,56 @@ sys.exit(status)
         self.assertEqual(self.run_launcher("up").returncode, 0)
         self.assertEqual(json.loads(self.staged_environment().read_text()), {})
 
+    def enable_web_links(self):
+        self.env["AGENTS_WEB_LINKS"] = "1"
+        self.env["DISPLAY"] = ":host-test"
+        directory = Path(self.env["XDG_RUNTIME_DIR"]) / "agents-web-links"
+        directory.mkdir(parents=True)
+        sock = socket.socket(socket.AF_UNIX)
+        sock.bind(str(directory / "socket"))
+        self.addCleanup(sock.close)
+        self.web_link_calls = self.base / "systemctl-calls"
+        systemctl = self.bin / "systemctl"
+        systemctl.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$TEST_SYSTEMCTL_CALLS"\n'
+                             'exit "${TEST_SYSTEMCTL_STATUS:-0}"\n')
+        systemctl.chmod(0o755)
+        self.env["TEST_SYSTEMCTL_CALLS"] = str(self.web_link_calls)
+        return directory
+
+    def test_web_link_socket_is_workspace_only_without_desktop_sockets(self):
+        directory = self.enable_web_links()
+        result = self.run_launcher("up")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        mount = f"type=bind,src={directory},dst=/run/agents-web-links,ro=true"
+        self.assertIn(mount, self.creation())
+        self.assertNotIn(mount, self.creation("agents-dallas-nix"))
+        self.assertNotIn(mount, self.creation("agents-dallas-gateway"))
+        calls = json.dumps([call for call in self.state["calls"] if call[0] == "create"])
+        for forbidden in ("/tmp/.X11-unix", "wayland-0", "DBUS_SESSION_BUS_ADDRESS", ":host-test"):
+            self.assertNotIn(forbidden, calls)
+        self.assertIn("--user start agents-web-links.service", self.web_link_calls.read_text())
+        self.assertIn("--user import-environment DISPLAY", self.web_link_calls.read_text())
+
+    def test_web_link_service_is_started_for_reused_workspace(self):
+        self.enable_web_links()
+        self.current_containers()
+        result = self.run_launcher("up")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--user start agents-web-links.service", self.web_link_calls.read_text())
+        self.assertFalse(any(call[0] in ("create", "rm") for call in self.state["calls"]))
+
+    def test_web_link_service_failure_stops_before_replacing_containers(self):
+        self.enable_web_links()
+        self.env["TEST_SYSTEMCTL_STATUS"] = "19"
+        result = self.run_launcher("up")
+        self.assertEqual(result.returncode, 19)
+        self.assertFalse(any(call[0] in ("create", "rm") for call in self.state["calls"]))
+
+    def test_disabled_web_links_has_no_host_socket_mount(self):
+        result = self.run_launcher("up")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("agents-web-links", json.dumps(self.state["calls"]))
+
     def enable_sound(self):
         self.env["AGENTS_SOUND"] = "1"
         directory = Path(self.env["XDG_RUNTIME_DIR"]) / "agents-sound"
@@ -772,8 +915,9 @@ sys.exit(status)
         self.assertEqual(result.returncode, 0, result.stderr)
         mount = f"type=bind,src={directory},dst=/run/agents-sound,ro=true"
         creates = [c for c in self.state["calls"] if c[0] == "create"]
-        self.assertIn(mount, next(c for c in creates if c[-1] == self.work_ref))
-        self.assertNotIn(mount, next(c for c in creates if c[-1] == self.gateway_ref))
+        self.assertIn(mount, self.creation())
+        self.assertNotIn(mount, self.creation("agents-dallas-nix"))
+        self.assertNotIn(mount, self.creation("agents-dallas-gateway"))
         self.assertNotIn("/pulse/", json.dumps(creates))
         self.assertIn("--user start agents-sound.service", self.sound_calls.read_text())
 

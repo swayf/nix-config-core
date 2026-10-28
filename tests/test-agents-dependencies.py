@@ -13,8 +13,8 @@ class AgentsDependencies(unittest.TestCase):
         edges = {
             "agents-container.nix": {"./agents-container/launcher.nix", "./agents-container/image.nix",
                 "./container-gateway.nix", "./agents-container/secret-environment.py",
-                "./agents-container/clipboard.py", "./agents-container/sound.py"},
-            "agents-container/image.nix": {"./process-preflight.sh", "./secret-environment.py", "./clipboard.py"},
+                "./agents-container/clipboard.py", "./agents-container/sound.py", "./agents-container/web-links.py"},
+            "agents-container/image.nix": {"./process-preflight.sh", "./secret-environment.py", "./clipboard.py", "./web-links.py"},
             "agents-container/launcher.nix": {"./launcher.sh"},
         }
         for name, expected in edges.items():

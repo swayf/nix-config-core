@@ -24,6 +24,8 @@ fi
 p() { "$AGENTS_PODMAN" "$@" 9>&-; }
 work=@workspaceName@
 gateway=@gatewayName@
+# A separate PID/mount namespace: builders never run in the agent workspace.
+daemon=$work-nix
 # The same list drives host validation and workspace device mounts.
 # TUN/FUSE remain required for networking and nested container workloads.
 host_devices=(/dev/net/tun /dev/fuse)
@@ -53,6 +55,58 @@ wait_workspace_ready() {
   timeout --foreground --kill-after=1 3 "$AGENTS_PODMAN" logs "$work" 9>&- >&2 || true
   echo 'Workspace startup/admission failed or timed out; no session was dispatched.' >&2
   return 1
+}
+
+wait_nix_daemon() {
+  local deadline=$((SECONDS + 30)) daemon_running
+  while (( SECONDS < deadline )); do
+    if timeout --foreground --kill-after=1 2 "$AGENTS_PODMAN" exec --user 1000:1000 "$daemon" \
+      /bin/nix --store daemon store ping 9>&- >/dev/null; then return 0; fi
+    if ! daemon_running=$(timeout --foreground --kill-after=1 2 "$AGENTS_PODMAN" inspect \
+      --format '{{.State.Running}}' "$daemon" 9>&-); then break; fi
+    if [[ $daemon_running != true ]]; then break; fi
+    sleep 0.2
+  done
+  timeout --foreground --kill-after=1 3 "$AGENTS_PODMAN" logs "$daemon" 9>&- >&2 || true
+  echo 'Private Nix daemon startup failed; workspace was not started.' >&2
+  return 1
+}
+
+# Never silently change ownership of a legacy single-user store, especially
+# while its workspace is live. Conversion needs a separately approved stop and
+# backup on the host. A marker alone does not override the ownership check.
+validate_store_layout() {
+  local store=$AGENTS_STATE/nix-root/nix
+  if [[ -e $store ]]; then
+    if [[ ! -f $AGENTS_STATE/nix-daemon-layout ]] ||
+      [[ $(<"$AGENTS_STATE/nix-daemon-layout") != keep-id-root-v1 ]] ||
+      [[ $(p unshare stat -c '%u:%g' "$store/store") != 1:30000 ]]; then
+      echo 'Legacy or invalid private Nix store: offline ownership conversion and backup required on the host; no containers were changed.' >&2
+      return 1
+    fi
+  fi
+}
+
+prepare_store() {
+  mkdir -p "$AGENTS_STATE/nix-root"
+  # Podman unshare root can update the offline store without trusting the agent
+  # at the daemon. Its UID 1 is UID 0 in keep-id:uid=1000 (host user is UID 0
+  # here, UID 1000 there). No host store or daemon socket enters a container.
+  p unshare nix copy --option build-users-group '' --no-check-sigs \
+    --to "local?root=$AGENTS_STATE/nix-root" "$AGENTS_ROOT"
+  local nix=$AGENTS_STATE/nix-root/nix directory
+  p unshare mkdir -p "$nix/var/nix/gcroots" "$nix/var/nix/daemon-socket"
+  p unshare ln -sfn "$AGENTS_ROOT" "$nix/var/nix/gcroots/agents-image"
+  p unshare chown -hR 1:1 "$nix"
+  p unshare chown 1:30000 "$nix/store"
+  p unshare chmod 1775 "$nix/store"
+  # Only user profile/GC-root links remain writable in the workspace. The
+  # database, store and daemon socket directory have no writable alias there.
+  for directory in profiles gcroots; do
+    p unshare mkdir -p "$nix/var/nix/$directory/per-user/$AGENTS_USER"
+    p unshare chown -hR 0:0 "$nix/var/nix/$directory/per-user/$AGENTS_USER"
+  done
+  printf 'keep-id-root-v1\n' > "$AGENTS_STATE/nix-daemon-layout"
 }
 
 podman_step() {
@@ -160,6 +214,7 @@ remove_containers() {
   # A workload must never survive a namespace replacement and accidentally join
   # an old namespace. Remove it first, preserving all bind-mounted state.
   p container exists "$work" && p rm -f "$work"
+  p container exists "$daemon" && p rm -f "$daemon"
   p container exists "$gateway" && p rm -f "$gateway"
   return 0
 }
@@ -259,12 +314,33 @@ up() {
     [[ $sound_ready == true ]] || { echo 'Sound bridge did not start.' >&2; return 1; }
     sound_args+=(--mount "type=bind,src=$sound_dir,dst=/run/agents-sound,ro=true")
   fi
-  if [[ $workspace_running == true ]] && running "$gateway"; then
-    local current_work current_gateway current_spec
+  local -a web_link_args=()
+  if [[ ${AGENTS_WEB_LINKS:-0} == 1 ]]; then
+    # Only the broker sees the desktop session; never mount display/D-Bus sockets.
+    # systemd-run starts the browser under the host user manager's environment.
+    local variable
+    for variable in DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_CURRENT_DESKTOP \
+      XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_DATA_DIRS XDG_CONFIG_DIRS BROWSER PATH; do
+      if [[ -n ${!variable:-} ]]; then systemctl --user import-environment "$variable"; fi
+    done
+    systemctl --user start agents-web-links.service
+    local web_link_dir=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/agents-web-links
+    local web_link_ready=false
+    for _ in {1..50}; do
+      if [[ -S $web_link_dir/socket ]]; then web_link_ready=true; break; fi
+      sleep 0.1
+    done
+    [[ $web_link_ready == true ]] || { echo 'Host browser bridge did not start.' >&2; return 1; }
+    web_link_args+=(--mount "type=bind,src=$web_link_dir,dst=/run/agents-web-links,ro=true")
+  fi
+  if [[ $workspace_running == true ]] && running "$gateway" && running "$daemon"; then
+    local current_work current_gateway current_daemon current_spec
     current_work=$(p inspect --format '{{.ImageName}}' "$work")
     current_gateway=$(p inspect --format '{{.ImageName}}' "$gateway")
+    current_daemon=$(p inspect --format '{{.ImageName}}' "$daemon")
     current_spec=$(p inspect --format '{{index .Config.Labels "home-manager.agents.spec"}}' "$work")
-    if [[ $current_work == "$AGENTS_IMAGE_REF" && $current_gateway == "$AGENTS_GATEWAY_REF" && $current_spec == "$AGENTS_SPEC" ]]; then
+    if [[ $current_work == "$AGENTS_IMAGE_REF" && $current_daemon == "$AGENTS_IMAGE_REF" && $current_gateway == "$AGENTS_GATEWAY_REF" && $current_spec == "$AGENTS_SPEC" ]]; then
+      wait_nix_daemon || return 1
       wait_workspace_ready || return 1
       prune_old_images
       return
@@ -272,14 +348,11 @@ up() {
   fi
   echo 'Checking host requirements...' >&2
   doctor >&2
+  validate_store_layout
   remove_containers
-  mkdir -p "$AGENTS_STATE/home" "$AGENTS_STATE/nix-root" "$AGENTS_PROJECTS"
-  # Seed/update a separate single-user store, including its SQLite registration
-  # database. This copies only missing paths; no host store/socket is mounted.
-  echo 'Preparing the private Nix store...' >&2
-  nix copy --no-check-sigs --to "local?root=$AGENTS_STATE/nix-root" "$AGENTS_ROOT"
-  mkdir -p "$AGENTS_STATE/nix-root/nix/var/nix/gcroots"
-  ln -sfn "$AGENTS_ROOT" "$AGENTS_STATE/nix-root/nix/var/nix/gcroots/agents-image"
+  mkdir -p "$AGENTS_STATE/home" "$AGENTS_PROJECTS"
+  echo 'Preparing the private daemon-owned Nix store...' >&2
+  prepare_store
   load_images
   printf 'nameserver 1.1.1.1\noptions timeout:2 attempts:2\n' > "$AGENTS_STATE/resolv.conf"
   podman_step 'Creating network gateway' create --name "$gateway" --pull=never --http-proxy=false \
@@ -302,6 +375,22 @@ up() {
     return 1
   fi
   echo 'Network gateway and default-deny firewall are ready.' >&2
+  # Reuse the seeded workspace image, but not its agent entrypoint, HOME,
+  # projects, devices, credentials environment or process namespace.
+  podman_step 'Creating private Nix daemon' create --name "$daemon" --init --pull=never --http-proxy=false \
+    --label "home-manager.agents.spec=$AGENTS_SPEC" \
+    --userns=keep-id:uid=1000,gid=1000 --user 0:0 \
+    --network="container:$gateway" --pids-limit=1024 \
+    --cap-drop=ALL --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=FOWNER \
+    --cap-add=SETUID --cap-add=SETGID --cap-add=KILL \
+    --security-opt=no-new-privileges \
+    --env HOME=/root --env USER=root --env NIX_REMOTE=local --env XDG_RUNTIME_DIR=/tmp/runtime-0 \
+    --mount "type=bind,src=$AGENTS_STATE/nix-root/nix,dst=/nix" \
+    --mount "type=bind,src=$AGENTS_STATE/resolv.conf,dst=/etc/resolv.conf,ro=true" \
+    --mount "type=bind,src=$AGENTS_STATE/nix-auth,dst=/run/agents-nix-auth,ro=true" \
+    --entrypoint /bin/nix-daemon "$AGENTS_IMAGE_REF" --option build-users-group nixbld
+  podman_step 'Starting private Nix daemon' start "$daemon"
+  wait_nix_daemon || return 1
   # Nested slirp creates a TUN in its OWN child netns. The device grants no
   # NET_ADMIN over the outer namespace or the gateway firewall.
   local -a device_args=(--group-add=keep-groups)
@@ -309,7 +398,7 @@ up() {
   for device in "${host_devices[@]}"; do device_args+=("--device=$device"); done
   # Pixel/Chromium need more than Podman's 64 MiB shared-memory default.
   # A private tmpfs limit, not a reservation; do not share the host IPC namespace.
-  podman_step 'Creating workspace container' create --name "$work" --init --pull=never --http-proxy=false \
+  podman_step 'Creating workspace container' create --name "$work" --init --init-path "$AGENTS_INIT" --pull=never --http-proxy=false \
     --label "home-manager.agents.spec=$AGENTS_SPEC" \
     --userns=keep-id:uid=1000,gid=1000 --user 1000:1000 \
     --network="container:$gateway" \
@@ -320,9 +409,12 @@ up() {
     "${device_args[@]}" \
     "${clipboard_args[@]}" \
     "${sound_args[@]}" \
+    "${web_link_args[@]}" \
     --mount "type=bind,src=$AGENTS_STATE/home,dst=$AGENTS_HOME" \
     --mount "type=bind,src=$AGENTS_PROJECTS,dst=$AGENTS_HOME/@projectDirectoryName@" \
-    --mount "type=bind,src=$AGENTS_STATE/nix-root/nix,dst=/nix" \
+    --mount "type=bind,src=$AGENTS_STATE/nix-root/nix,dst=/nix,ro=true" \
+    --mount "type=bind,src=$AGENTS_STATE/nix-root/nix/var/nix/profiles/per-user/$AGENTS_USER,dst=/nix/var/nix/profiles/per-user/$AGENTS_USER" \
+    --mount "type=bind,src=$AGENTS_STATE/nix-root/nix/var/nix/gcroots/per-user/$AGENTS_USER,dst=/nix/var/nix/gcroots/per-user/$AGENTS_USER" \
     --mount "type=bind,src=$AGENTS_STATE/resolv.conf,dst=/etc/resolv.conf,ro=true" \
     --mount "type=bind,src=$AGENTS_STATE/nix-auth,dst=/run/agents-nix-auth,ro=true" \
     --mount "type=bind,src=$secret_directory,dst=/run/agents-secret-environment,ro=true" \
@@ -337,7 +429,7 @@ up() {
 case "$command" in
   up) up ;;
   down) remove_containers ;;
-  rebuild) remove_containers; up ;;
+  rebuild) validate_store_layout; remove_containers; up ;;
   doctor) doctor ;;
   status) p ps -a --filter "name=^@workspaceName@" ;;
   logs) p logs "$gateway" ;;
@@ -361,7 +453,11 @@ case "$command" in
       set -e
       date +"%F %T %Z %z"
       if [[ $1 == 1 ]]; then test -r /dev/kvm && test -w /dev/kvm; fi
-      nix store ping
+      test "$(stat -c %u /nix/store)" = 0
+      case ",$(findmnt -n -o VFS-OPTIONS -T /nix/store)," in
+        *,ro,*) ;; *) echo "agents: store mount is not read-only" >&2; exit 1 ;;
+      esac
+      nix --store daemon store ping
       podman unshare cat /proc/self/uid_map
       curl --noproxy "*" --fail --max-time 20 https://api.ipify.org
       echo

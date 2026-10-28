@@ -23,6 +23,7 @@ let
     secretSources = { FIXTURE_KEY = "/run/fixture/key"; MISSING_KEY = null; };
     clipboard = { enable = true; waylandSocket = "/run/fixture/wayland-0"; };
     sound.enable = true;
+    webLinks.enable = true;
   });
   disabled = make "/srv/alice" {};
   missingSoftware = make "/srv/alice" { enable = true; inherit proxy; };
@@ -51,7 +52,29 @@ let
   agentsServices = h: lib.filterAttrs (n: _: lib.hasPrefix "agents-" n) h.config.systemd.user.services;
   launcher = h: lib.findFirst (p: p.name == "agents")
     (throw "agents launcher missing from home.packages") h.config.home.packages;
+  # Inspect the real recipe's image configuration and generated /etc script
+  # without building/importing OCI images or enabling the container service.
+  recipeFor = webLinks: import ../modules/home-manager/agents-container/image.nix {
+    inherit webLinks;
+    pkgs = pkgs // { dockerTools.buildLayeredImage = args: args; };
+    inherit lib software;
+    username = "alice";
+    imageName = "localhost/agents-test";
+    timeZone = "UTC";
+    projectDirectoryName = "projects";
+  };
+  recipe = recipeFor false;
+  webRecipe = recipeFor true;
+  accountScript = (builtins.elemAt (builtins.head recipe.image.contents).paths
+    (builtins.length software.packages)).buildCommand;
   result = {
+    daemonName = minimal.config.services.agents-container.nixDaemonName == "agents-workspace-nix";
+    daemonClient = builtins.elem "NIX_REMOTE=daemon" recipe.image.config.Env;
+    untrustedAgent = lib.hasInfix "trusted-users = root" accountScript
+      && lib.hasInfix "allowed-users = alice" accountScript;
+    separateBuildUsers = lib.hasInfix "build-users-group = nixbld" accountScript
+      && lib.hasInfix "nixbld1:x:30001:30000:" accountScript
+      && lib.hasInfix "nixbld16:x:30016:30000:" accountScript;
     assertions = failed minimal == [] && failed alternate == [] && failed disabled == [];
     explicitSoftware = rejects missingSoftware;
     explicitProxy = rejects missingProxy;
@@ -70,13 +93,28 @@ let
       && minimal.config.services.agents-container.gpuDevices == []
       && !minimal.config.services.agents-container.sound.enable
       && !minimal.config.services.agents-container.clipboard.enable
+      && !minimal.config.services.agents-container.webLinks.enable
       && minimal.config.services.agents-container.nixAccessTokensFile == null
       && minimal.config.services.agents-container.proxy.directPort == null;
     noImplicitUpdater = minimal.config.services.agents-container.updateInput == null
       && minimal.config.services.agents-container.shellCommand == "bash";
     disabledHasNoServices = agentsServices disabled == {};
     noAutoStart = !(minimal.config.systemd.user.services.agents-container ? Install);
-    brokers = builtins.attrNames (agentsServices alternate) == [ "agents-clipboard" "agents-container" "agents-sound" ];
+    brokers = builtins.attrNames (agentsServices alternate)
+      == [ "agents-clipboard" "agents-container" "agents-sound" "agents-web-links" ];
+    webLinkShimOptIn = (lib.last (builtins.head webRecipe.image.contents).paths).name == "xdg-open"
+      && (lib.last (builtins.head recipe.image.contents).paths).name != "xdg-open";
+    webLinkService = let
+      unit = alternate.config.systemd.user.services.agents-web-links;
+      command = lib.concatStringsSep " " unit.Service.ExecStart;
+    in
+      unit.Service.RuntimeDirectoryMode == "0700"
+      && unit.Service.RuntimeDirectoryPreserve == "yes"
+      && lib.hasInfix "/bin/systemd-run" command
+      && lib.hasInfix "/bin/xdg-open" command
+      && !(unit ? Install);
+    webLinkToggleChangesSpec = minimal.config.services.agents-container.runtimeSpec
+      != (make "/srv/alice" (settings // { webLinks.enable = true; })).config.services.agents-container.runtimeSpec;
     hostSoundMapEmpty = alternate.config.services.agents-container.sound.events == {};
     generations = lib.hasSuffix ".drv" minimal.activationPackage.drvPath
       && lib.hasSuffix ".drv" alternate.activationPackage.drvPath;

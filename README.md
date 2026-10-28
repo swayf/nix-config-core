@@ -621,7 +621,7 @@ personal resource default. `proxy.listen` must be loopback; `directPort` default
 to null and enables only explicit proxy opt-in, never a TUN fallback.
 `proxy.service` optionally supplies a host unit dependency.
 
-KVM, GPU devices, clipboard, sound and Nix token sharing are disabled by default.
+KVM, GPU devices, clipboard, sound, host web links and Nix token sharing are disabled by default.
 The caller chooses image/container names, timezone, project directory name,
 state/shared directories and Podman executable. `shellCommand` defaults to Bash;
 `updateInput` defaults to null (explicit caller lock updates, no implicit agent
@@ -637,11 +637,59 @@ assets remain host-owned; guests send only event names. Host display, microphone
 Nix store and daemon sockets are not mounted.
 
 `lib.mkAgentsImage { pkgs; lib; username; software; imageName; timeZone;
-projectDirectoryName; minimumFreePids ? 256; }` exposes `image` and `root`.
+projectDirectoryName; minimumFreePids ? 256; webLinks ? false; }` exposes `image` and `root`.
 `lib.mkAgentsLauncherText` renders validated technical names; compatibility
 adapters can preserve their earlier `runtimeSpec` hash schema without a second
 launcher implementation. `lib.agentsRuntimeHelpers` exposes the unchanged
 preflight, secret, clipboard, sound and sound-client paths.
+
+Opt in to host browser links with `services.agents-container.webLinks.enable = true`.
+The image then supplies an `xdg-open` shim; the launcher starts the host user
+service `agents-web-links` and mounts only its private socket directory read-only
+at `/run/agents-web-links`. Herdr's ordinary Ctrl-click and mouse capture remain
+unchanged. No display or desktop D-Bus socket enters the workspace. The broker
+accepts only absolute HTTP(S) URLs without whitespace, controls or embedded
+credentials; local files, other schemes, extra fields and guest-selected commands
+are rejected. Requests require the host user's peer UID and are limited to one
+per second and twenty per minute. Any workspace process can request a browser
+open; this is not proof of a human click or a restriction on pages' effects in
+the user's authenticated browser. URLs are not logged by the bridge.
+
+The host uses fixed `systemd-run --user --collect` and `xdg-open` executables;
+a transient user service keeps a newly launched browser outside the broker's
+cgroup. Restarting the broker must not close that browser. The host desktop
+session must have a working default HTTP(S) handler. Successful acknowledgement
+means the host launcher accepted the request, not that a window appeared.
+Headless callers should leave this opt-in disabled. Test protocol/launch argv
+with `python3 modules/home-manager/agents-container/test-web-links.py`; it starts
+no browser or actual user service.
+
+The workspace uses `NIX_REMOTE=daemon` and a read-only private `/nix` mount.
+A `${workspaceName}-nix` sidecar (also exposed as read-only option `nixDaemonName`)
+runs `nix-daemon` as keep-id namespace root, owning the store/database. Builders
+use `nixbld1`–`nixbld16` (UIDs 30001–30016), not root or workspace UID 1000.
+Only root is trusted. Both the agent entrypoint and a custom `--init-path` wrapper
+clear inheritable/ambient capabilities before user code and the PID 1 reaper;
+effective/permitted capabilities disappear at exec. The wrapper and catatonit
+are part of the seeded closure, so no capable default init remains in the workspace.
+SETUID/SETGID remain bounded for the nested Podman setuid mapping helpers.
+Daemon and workspace do not share PID/mount namespaces or private HOME/projects.
+Only per-user profile and GC-root directories have writable workspace submounts.
+The daemon shares the gateway network and dedicated Nix auth, but no agent API
+secrets, devices or brokers. Existing `sandbox = false` is not hardened here.
+
+The sidecar reuses the workspace image and seeded closure; delivery remains
+non-self-contained. Offline host seeding runs under `podman unshare`, normalizes
+store ownership to UID 1 (keep-id root), and leaves per-user links at UID 0
+(keep-id workspace UID 1000). Store group 30000 permits non-root builders.
+On restart only missing paths are copied, but ownership normalization traverses
+the private store. Persistent data is not removed. Legacy stores fail closed
+before container removal: a host-approved offline backup/conversion must establish
+ownership and `nix-daemon-layout` (`keep-id-root-v1`). Existing contents must be
+verified: changing ownership does not repair previously modified packages. A marker
+without correct store ownership is rejected. Automatic live conversion is intentionally absent.
+These mapping assumptions need real rootless-host acceptance before deployment;
+unit/eval checks do not prove builds, profile operations or post-recreate protection.
 
 `lib.mkAgentsChecks { nixpkgs; homeManager; }` returns synthetic `result`, `check`,
 `image`, `gateway`, `launcher` and `brokerLauncher` targets with caller-owned pins.
