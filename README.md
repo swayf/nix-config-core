@@ -643,6 +643,33 @@ adapters can preserve their earlier `runtimeSpec` hash schema without a second
 launcher implementation. `lib.agentsRuntimeHelpers` exposes the unchanged
 preflight, secret, clipboard, sound and sound-client paths.
 
+`agents open 8071` opens `http://127.0.0.1:8071`; a bare port must contain only
+ASCII decimal digits and be in 1–65535. Full URLs remain supported:
+`agents open http://127.0.0.1:8071/path?query=value` is a host-only local
+preview: bind that port on host IPv4 loopback, probe the already running
+workspace's loopback service, forward raw TCP via `podman exec -i`, and ask the
+normal host browser handler to open the URL. Keep it running until Ctrl+C.
+Only HTTP(S), an explicit port, and `127.0.0.1`/`localhost` are accepted;
+credentials, controls and other hosts are refused. An occupied host port or
+unavailable target/browser launcher fails without retaining a forwarder.
+There are at most 32 concurrent connections; after client write EOF, response
+draining is bounded to five seconds. This is a development preview, not a
+public ingress. No implicit container start/rebuild, lifecycle lock, secrets,
+firewall change or workspace-mounted host socket is involved. The dispatch
+is outside `mkAgentsLauncherText` and the compatibility hash, so adding it does
+not require workspace recreation. The existing image's `/bin/python3` is used
+in isolated mode with fixed tool-owned code; no new image dependency or
+workspace source is needed. The host's `xdg-open` runs directly with the invoking
+desktop terminal's environment, in a separate POSIX session so Ctrl+C on the
+forwarder does not reach the browser. An immediate nonzero opener exit fails;
+a long-running opener is retained and reaped without being killed by a startup
+deadline. A later nonzero exit is reported while forwarding remains active.
+Messages report the opener's status, never claim that a window appeared. No
+transient user service or user-manager environment import is used for previews.
+This explicit host command is independent of the guest web-links opt-in below.
+Test it with `python3 modules/home-manager/agents-container/test-open.py`;
+fixtures use real loopback/stdio but fake Podman and desktop launchers.
+
 Opt in to host browser links with `services.agents-container.webLinks.enable = true`.
 The image then supplies an `xdg-open` shim; the launcher starts the host user
 service `agents-web-links` and mounts only its private socket directory read-only

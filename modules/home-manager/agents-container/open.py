@@ -16,11 +16,11 @@ try:
     with socket.create_connection(('127.0.0.1', int(sys.argv[1])), timeout=5) as peer:
         if sys.argv[2] == 'probe':
             sys.exit(0)
-        inputs = [0, peer.fileno()]
+        readers = [0, peer.fileno()]
         deadline = None
-        while inputs:
+        while readers:
             timeout = None if deadline is None else max(0, deadline - time.monotonic())
-            ready, _, _ = select.select(inputs, [], [], timeout)
+            ready, _, _ = select.select(readers, [], [], timeout)
             if not ready:
                 break
             for source in ready:
@@ -30,7 +30,7 @@ try:
                         peer.sendall(data)
                     else:
                         peer.shutdown(socket.SHUT_WR)
-                        inputs.remove(0)
+                        readers.remove(0)
                         # Drain a half-closed request, but do not strand an exec
                         # after the host client/forwarder has disappeared.
                         deadline = time.monotonic() + 5
@@ -48,9 +48,11 @@ except (OSError, ValueError):
 def preview_url(url):
     """Never resolve a caller-selected hostname or expose a non-loopback port."""
     if not isinstance(url, str) or not url or len(url.encode('utf-8')) > 8192:
-        raise ValueError('expected a loopback HTTP(S) URL of at most 8192 bytes')
+        raise ValueError('expected a port or loopback HTTP(S) URL of at most 8192 bytes')
     if any(c.isspace() or ord(c) < 32 or ord(c) == 127 or c == '\\' for c in url):
         raise ValueError('URL contains whitespace, controls or backslashes')
+    if url.isascii() and url.isdecimal():
+        url = f'http://127.0.0.1:{url}'
     try:
         parts = urlsplit(url)
         port = parts.port
@@ -61,7 +63,7 @@ def preview_url(url):
     except ValueError:
         valid = False
     if not valid:
-        raise ValueError('use http(s)://127.0.0.1:PORT/... without credentials')
+        raise ValueError('use PORT (1-65535) or http(s)://127.0.0.1:PORT/... without credentials')
     return urlunsplit(parts._replace(netloc=f'127.0.0.1:{port}')), port
 
 
@@ -159,22 +161,38 @@ class PreviewServer(socketserver.ThreadingTCPServer):
             stop_child(child)
 
 
-def open_browser(runner, opener, url):
+def reap_opener(child):
+    status = child.wait()
+    if status:
+        print(f'agents open: host browser opener later exited with status {status}; '
+              'forwarding remains active', file=sys.stderr, flush=True)
+
+
+def open_browser(opener, url):
     try:
-        # Like the existing web-links broker, keep the browser outside the
-        # forwarder's cgroup. Ctrl+C must not close the desktop browser.
-        subprocess.run(
-            [runner, '--user', '--collect', '--quiet', '--property=Type=exec',
-             '--property=StandardOutput=null', '--property=StandardError=null',
-             '--description=Agents local preview', '--', opener, url],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=5, check=True,
+        # Desktop handlers need the invoking terminal's session environment,
+        # not a user manager's potentially stale environment. A separate POSIX
+        # session keeps Ctrl+C for the forwarder away from the browser.
+        child = subprocess.Popen(
+            [opener, url], start_new_session=True, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-    except (OSError, subprocess.SubprocessError):
-        raise ValueError('host browser launcher failed; no forwarding was retained') from None
+    except OSError:
+        raise ValueError('host browser opener could not be started') from None
+    try:
+        status = child.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        # xdg-open may remain attached to the browser for its entire lifetime.
+        # A startup deadline is not an error and must never kill that browser.
+        threading.Thread(target=reap_opener, args=(child,), daemon=True).start()
+        return 'browser opener still running'
+    if status:
+        raise ValueError(f'host browser opener exited with status {status}; '
+                         'no forwarding was retained')
+    return 'browser opener exited with status 0'
 
 
-def open_preview(podman, workspace, runner, opener, url):
+def open_preview(podman, workspace, opener, url):
     url, port = preview_url(url)
     stop = threading.Event()
     previous = {sig: signal.signal(sig, lambda *_: stop.set())
@@ -191,10 +209,12 @@ def open_preview(podman, workspace, runner, opener, url):
             worker.start()
             try:
                 if not stop.is_set():
-                    open_browser(runner, opener, url)
-                    print(f'Forwarding host 127.0.0.1:{port} to workspace loopback; '
-                          'browser launch accepted. Ctrl+C stops forwarding.', flush=True)
-                    stop.wait()
+                    browser_status = open_browser(opener, url)
+                    if not stop.is_set():
+                        print(f'Forwarding host 127.0.0.1:{port} to workspace loopback; '
+                              f'{browser_status}. Window appearance is not verified. '
+                              'Ctrl+C stops forwarding.', flush=True)
+                        stop.wait()
             finally:
                 server.shutdown()
                 server.close_relays()
@@ -205,21 +225,27 @@ def open_preview(podman, workspace, runner, opener, url):
 
 
 def main(args):
-    # The first four arguments are fixed by the host package, never the URL.
-    if len(args) == 5 and args[-1] in ('--help', '-h'):
-        print('Usage: agents open http(s)://127.0.0.1:PORT/PATH\n'
+    # The first three arguments are fixed by the host package, never the URL.
+    if len(args) == 4 and args[-1] in ('--help', '-h'):
+        print('Usage: agents open PORT|http(s)://127.0.0.1:PORT/PATH\n'
+              'A bare PORT opens http://127.0.0.1:PORT (1-65535).\n'
               'Forward an existing workspace service and open the host browser.\n'
               'Runs in the foreground until Ctrl+C; never starts or rebuilds containers.')
         return 0
-    if len(args) != 5:
-        print('Usage: agents open http(s)://127.0.0.1:PORT/PATH', file=sys.stderr)
+    if len(args) != 4:
+        print('Usage: agents open PORT|http(s)://127.0.0.1:PORT/PATH', file=sys.stderr)
         return 2
     try:
         open_preview(*args)
-    except (OSError, ValueError, UnicodeError):
-        # Specific safe errors below never contain the supplied URL.
-        print('agents open: unable to open local preview; check URL, host port, '
-              'running workspace/service and desktop launcher', file=sys.stderr)
+    except UnicodeError:
+        print('agents open: invalid URL encoding', file=sys.stderr)
+        return 1
+    except ValueError as error:
+        # Only tool-owned, constant messages reach this branch.
+        print(f'agents open: {error}', file=sys.stderr)
+        return 1
+    except OSError:
+        print('agents open: local preview failed', file=sys.stderr)
         return 1
     return 0
 

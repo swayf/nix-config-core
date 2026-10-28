@@ -57,7 +57,7 @@ let
         shift
         exec ${pkgs.python3}/bin/python3 -I -B ${./agents-container/open.py} \
           ${lib.escapeShellArg cfg.podmanExecutable} ${lib.escapeShellArg cfg.workspaceName} \
-          ${pkgs.systemd}/bin/systemd-run ${pkgs.xdg-utils}/bin/xdg-open "$@"
+          ${pkgs.xdg-utils}/bin/xdg-open "$@"
       fi
       export AGENTS_SECRET_SOURCES=${lib.escapeShellArg (builtins.toJSON cfg.secretSources)}
       export AGENTS_NIX_ACCESS_TOKENS=${

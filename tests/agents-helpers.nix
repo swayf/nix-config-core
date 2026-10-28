@@ -3,7 +3,8 @@ let
   resources = ../modules/home-manager/agents-container;
   source = pkgs.lib.fileset.toSource {
     root = ../.;
-    fileset = pkgs.lib.fileset.unions (map (name: resources + "/${name}") [
+    fileset = pkgs.lib.fileset.unions ([ ../modules/home-manager/agents-container.nix ]
+      ++ map (name: resources + "/${name}") [
       "image.nix" "launcher.sh" "process-preflight.sh" "secret-environment.py"
       "clipboard.py" "sound.py" "sound-client.py" "web-links.py" "test-web-links.py" "test-launcher.py"
       "open.py" "test-open.py"
