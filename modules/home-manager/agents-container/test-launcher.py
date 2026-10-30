@@ -57,13 +57,14 @@ def bounded_launcher(args, *, env, cwd=None, timeout=15):
                 raise OSError(ctypes.get_errno(), "fixture subreaper restore failed")
 
 
-def launcher_source():
+def launcher_source(command_name="agents"):
     return Path(__file__).with_name("launcher.sh").read_text().replace(
         "@workspaceName@", "agents-dallas").replace(
         "@gatewayName@", "agents-dallas-gateway").replace(
         "@projectDirectoryName@", "projects").replace(
         "@shellCommand@", "herdr").replace(
-        "@updateCommand@", 'nix flake update --flake "path:$flake" llm-agents')
+        "@updateCommand@", 'nix flake update --flake "path:$flake" llm-agents').replace(
+        "@commandName@", command_name).replace("@proxyLabel@", "US")
 
 
 class LauncherUpdateTest(unittest.TestCase):
@@ -843,6 +844,37 @@ sys.exit(status)
         self.env["AGENTS_SECRET_SOURCES"] = "{}"
         self.assertEqual(self.run_launcher("up").returncode, 0)
         self.assertEqual(json.loads(self.staged_environment().read_text()), {})
+
+    def test_second_instance_isolates_host_brokers_and_staged_secrets(self):
+        source = launcher_source("agents-lt")
+        prefix, dispatch = source.split('case "$command" in\n', 1)
+        self.launcher.write_text(prefix + '\ndoctor() { :; }\ncase "$command" in\n' + dispatch)
+        runtime = Path(self.env["XDG_RUNTIME_DIR"])
+        old_secret = runtime / "agents-container-secrets/environment.json"
+        old_secret.parent.mkdir(parents=True)
+        old_secret.write_text('{"OLD_FIXTURE_KEY":"keep"}')
+        calls = self.base / "systemctl-calls"
+        systemctl = self.bin / "systemctl"
+        systemctl.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$TEST_SYSTEMCTL_CALLS"\n')
+        systemctl.chmod(0o755)
+        self.env.update(AGENTS_CLIPBOARD="1", AGENTS_SOUND="1", AGENTS_WEB_LINKS="1",
+                        TEST_SYSTEMCTL_CALLS=str(calls))
+        for kind in ("clipboard", "sound", "web-links"):
+            directory = runtime / ("agents-lt-" + kind)
+            directory.mkdir()
+            server = socket.socket(socket.AF_UNIX)
+            self.addCleanup(server.close)
+            server.bind(str(directory / "socket"))
+        result = self.run_launcher("up")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Run: agents-lt shell", result.stdout)
+        self.assertEqual(old_secret.read_text(), '{"OLD_FIXTURE_KEY":"keep"}')
+        workspace = self.creation()
+        for kind in ("clipboard", "sound", "web-links"):
+            self.assertIn(f"--user start agents-lt-{kind}.service", calls.read_text())
+            self.assertNotIn(f"--user start agents-{kind}.service", calls.read_text())
+            self.assertIn(f"type=bind,src={runtime}/agents-lt-{kind},dst=/run/agents-{kind},ro=true", workspace)
+        self.assertIn(f"type=bind,src={runtime}/agents-lt-container-secrets,dst=/run/agents-secret-environment,ro=true", workspace)
 
     def enable_web_links(self):
         self.env["AGENTS_WEB_LINKS"] = "1"

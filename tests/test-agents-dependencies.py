@@ -61,7 +61,7 @@ class AgentsDependencies(unittest.TestCase):
     def test_host_browser_runner_tracks_children_without_changing_guest(self):
         module = (HM / "agents-container.nix").read_text()
         self.assertIn('exec ${pkgs.systemd}/bin/systemd-run --property=ExitType=cgroup "$@"', module)
-        unit = module.split("systemd.user.services.agents-web-links =", 1)[1]
+        unit = module.split('systemd.user.services."${cfg.commandName}-web-links" =', 1)[1]
         self.assertIn('"${webLinkRunner}/bin/systemd-run"', unit)
         for token in ("KillMode=none", "KillMode=process", "--setenv=PATH"):
             self.assertNotIn(token, module)

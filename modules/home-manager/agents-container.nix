@@ -21,7 +21,8 @@ let
     in normalized != "/nix/store" && !lib.hasPrefix "/nix/store/" normalized));
   launcherText = import ./agents-container/launcher.nix {
     inherit lib;
-    inherit (cfg) workspaceName gatewayName projectDirectoryName shellCommand updateInput;
+    inherit (cfg) workspaceName gatewayName projectDirectoryName shellCommand updateInput commandName;
+    proxyLabel = cfg.proxy.label;
   };
   work = import ./agents-container/image.nix {
     inherit pkgs lib;
@@ -44,7 +45,7 @@ let
     exec ${pkgs.systemd}/bin/systemd-run --property=ExitType=cgroup "$@"
   '';
   launcher = pkgs.writeShellApplication {
-    name = "agents";
+    name = cfg.commandName;
     runtimeInputs = [
       pkgs.coreutils
       pkgs.util-linux
@@ -95,6 +96,17 @@ in
 {
   options.services.agents-container = {
     enable = lib.mkEnableOption "the rootless agents workspace with explicit egress policy";
+    commandName = lib.mkOption {
+      type = lib.types.strMatching "[a-z][a-z0-9-]*";
+      default = "agents";
+      description = "Launcher and host service/runtime namespace. Use a distinct name for each independently evaluated instance.";
+    };
+    package = lib.mkOption {
+      type = lib.types.package;
+      readOnly = true;
+      default = launcher;
+      description = "Host launcher, for explicit composition of independently evaluated instances.";
+    };
     software = lib.mkOption {
       type = lib.types.nullOr (lib.types.submodule {
         options = {
@@ -122,6 +134,11 @@ in
     shellCommand = lib.mkOption { type = lib.types.strMatching "[A-Za-z0-9_./-]+"; default = "bash"; };
     updateInput = lib.mkOption { type = lib.types.nullOr (lib.types.strMatching "[A-Za-z0-9_-]+"); default = null; };
     proxy = {
+      label = lib.mkOption {
+        type = lib.types.strMatching "[A-Za-z0-9_-]+";
+        default = "US";
+        description = "Diagnostic listener label only; the legacy default preserves existing launcher hashes. Does not select routing.";
+      };
       port = lib.mkOption { type = lib.types.nullOr lib.types.port; default = null; };
       directPort = lib.mkOption { type = lib.types.nullOr lib.types.port; default = null; };
       httpProxy = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; };
@@ -132,7 +149,8 @@ in
       type = lib.types.strMatching "[0-9a-f]{64}";
       default = builtins.hashString "sha256" (builtins.toJSON {
         inherit (cfg) sharedDirectory stateDirectory gpuDevices kvm clipboard
-          nixAccessTokensFile secretSources proxy;
+          nixAccessTokensFile secretSources;
+        proxy = builtins.removeAttrs cfg.proxy [ "label" ];
         sound.enable = cfg.sound.enable;
         webLinks.enable = cfg.webLinks.enable;
         username = config.home.username;
@@ -174,7 +192,7 @@ in
     };
     stateDirectory = lib.mkOption {
       type = lib.types.str;
-      default = "${config.xdg.dataHome}/agents-container";
+      default = "${config.xdg.dataHome}/${cfg.commandName}-container";
       description = "Persistent private home and Nix store; never the host's store or daemon socket.";
     };
     nixAccessTokensFile = lib.mkOption {
@@ -291,10 +309,10 @@ in
       }
     ];
     home.packages = [ launcher ];
-    systemd.user.services.agents-clipboard = lib.mkIf cfg.clipboard.enable {
+    systemd.user.services."${cfg.commandName}-clipboard" = lib.mkIf cfg.clipboard.enable {
       Unit.Description = "Clipboard-only bridge for the agents workspace";
       Service = {
-        ExecStart = "${pkgs.python3}/bin/python3 ${./agents-container/clipboard.py} serve %t/agents-clipboard/socket";
+        ExecStart = "${pkgs.python3}/bin/python3 ${./agents-container/clipboard.py} serve %t/${cfg.commandName}-clipboard/socket";
         # wl-copy invokes cat to copy file-backed stdin, and xdg-mime for
         # untyped data; GNOME's MIME backend also needs gio.
         Environment = [
@@ -310,7 +328,7 @@ in
         ++ lib.optional (
           cfg.clipboard.waylandSocket != null
         ) "WAYLAND_DISPLAY=${cfg.clipboard.waylandSocket}";
-        RuntimeDirectory = "agents-clipboard";
+        RuntimeDirectory = "${cfg.commandName}-clipboard";
         RuntimeDirectoryMode = "0700";
         # Keep the bind-mounted directory valid across broker restarts.
         RuntimeDirectoryPreserve = "yes";
@@ -318,17 +336,17 @@ in
         Restart = "on-failure";
       };
     };
-    systemd.user.services.agents-sound = lib.mkIf cfg.sound.enable {
+    systemd.user.services."${cfg.commandName}-sound" = lib.mkIf cfg.sound.enable {
       Unit.Description = "Playback-only sound bridge for Herdr and the agents workspace";
       Service = {
         ExecStart = lib.escapeShellArgs [
           "${pkgs.python3}/bin/python3"
           "${./agents-container/sound.py}"
-          "%t/agents-sound/socket"
+          "%t/${cfg.commandName}-sound/socket"
           cfg.sound.configFile
           "${pkgs.pulseaudio}/bin/paplay"
         ];
-        RuntimeDirectory = "agents-sound";
+        RuntimeDirectory = "${cfg.commandName}-sound";
         RuntimeDirectoryMode = "0700";
         RuntimeDirectoryPreserve = "yes";
         UMask = "0077";
@@ -336,17 +354,17 @@ in
         Restart = "on-failure";
       };
     };
-    systemd.user.services.agents-web-links = lib.mkIf cfg.webLinks.enable {
+    systemd.user.services."${cfg.commandName}-web-links" = lib.mkIf cfg.webLinks.enable {
       Unit.Description = "HTTP(S)-only host browser bridge for the agents workspace";
       Service = {
         ExecStart = lib.escapeShellArgs [
           "${pkgs.python3}/bin/python3" "-B"
           "${./agents-container/web-links.py}" "serve"
-          "%t/agents-web-links/socket"
+          "%t/${cfg.commandName}-web-links/socket"
           "${webLinkRunner}/bin/systemd-run"
           "${pkgs.xdg-utils}/bin/xdg-open"
         ];
-        RuntimeDirectory = "agents-web-links";
+        RuntimeDirectory = "${cfg.commandName}-web-links";
         RuntimeDirectoryMode = "0700";
         RuntimeDirectoryPreserve = "yes";
         UMask = "0077";
@@ -356,7 +374,7 @@ in
     };
     # Start explicitly with `systemctl --user start agents-container` or `agents
     # up`. An HM switch should not boot an agent workspace as a side effect.
-    systemd.user.services.agents-container = {
+    systemd.user.services."${cfg.commandName}-container" = {
       Unit = {
         Description = "Agents workspace with explicit egress policy";
         Wants = lib.optional (cfg.proxy.service != null) cfg.proxy.service;
@@ -365,8 +383,8 @@ in
       Service = {
         Type = "oneshot";
         RemainAfterExit = true;
-        ExecStart = "${launcher}/bin/agents up";
-        ExecStop = "${launcher}/bin/agents down";
+        ExecStart = "${launcher}/bin/${cfg.commandName} up";
+        ExecStop = "${launcher}/bin/${cfg.commandName} down";
         TimeoutStartSec = 600;
         TimeoutStopSec = 60;
       };

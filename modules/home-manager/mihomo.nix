@@ -24,6 +24,11 @@ let
 
   providers = lib.optional hasSub "sub" ++ lib.optional hasNodes "own";
   enabled = providers != [ ];
+  egressNames = builtins.attrNames cfg.fixedEgress;
+  listenerPorts = [ cfg.mixedPort 9999 ]
+    ++ lib.optional cfg.us.enable cfg.us.port
+    ++ lib.optional cfg.direct.enable cfg.direct.port
+    ++ map (name: cfg.fixedEgress.${name}.port) egressNames;
 
   indentTail =
     n: text:
@@ -344,6 +349,25 @@ in
       };
     };
 
+    fixedEgress = lib.mkOption {
+      default = {};
+      description = "Additional loopback-only listeners, each pinned to one exact private node with REJECT on an empty provider match.";
+      type = lib.types.attrsOf (lib.types.submodule ({ config, ... }: {
+        options = {
+          nodeName = lib.mkOption {
+            type = lib.types.strMatching "[A-Za-z0-9_-]+";
+            description = "Exact node label in mhnodes, not a regular expression or credential.";
+          };
+          port = lib.mkOption { type = lib.types.port; };
+          httpProxy = lib.mkOption {
+            type = lib.types.str;
+            readOnly = true;
+            default = "http://127.0.0.1:${toString config.port}";
+          };
+        };
+      }));
+    };
+
     direct = {
       enable = lib.mkEnableOption "a loopback-only proxy with forced DIRECT host egress";
       port = lib.mkOption {
@@ -392,6 +416,18 @@ in
 
   config = {
     assertions = [
+      {
+        assertion = egressNames == [] || hasNodes;
+        message = "services.mihomo.fixedEgress requires the private mhnodes secret.";
+      }
+      {
+        assertion = lib.all (name: builtins.match "[a-z][a-z0-9-]*" name != null) egressNames;
+        message = "services.mihomo.fixedEgress names must contain only lowercase letters, digits and hyphens, starting with a letter.";
+      }
+      {
+        assertion = egressNames == [] || lib.length listenerPorts == lib.length (lib.unique listenerPorts);
+        message = "Mihomo listener and controller ports must be distinct, including fixedEgress ports.";
+      }
       {
         assertion = !enabled || cfg.ruleSeed != null;
         message = "Mihomo providers require an explicitly pinned services.mihomo.ruleSeed.";
@@ -462,7 +498,7 @@ in
           log-level: info
           ipv6: false
 
-          ${lib.optionalString (cfg.us.enable || cfg.direct.enable) ''
+          ${lib.optionalString (cfg.us.enable || cfg.direct.enable || egressNames != []) ''
             listeners:
             ${lib.optionalString cfg.us.enable ''
               - name: us
@@ -479,7 +515,14 @@ in
                 port: ${toString cfg.direct.port}
                 udp: true
                 proxy: DIRECT
-            ''}
+            ''}${lib.concatMapStrings (name: ''
+              - name: egress-${name}
+                type: mixed
+                listen: "127.0.0.1"
+                port: ${toString cfg.fixedEgress.${name}.port}
+                udp: true
+                proxy: egress-${name}
+            '') egressNames}
           ''}
 
           external-controller: ${controller}
@@ -523,7 +566,14 @@ in
                   filter: ${builtins.toJSON cfg.us.nodeFilter}
                   empty-fallback: REJECT
               ''
-            )}
+            )}${indentTail 2 (lib.concatMapStrings (name: ''
+
+              - name: egress-${name}
+                type: select
+                use: [ own ]
+                filter: ${builtins.toJSON ("^" + cfg.fixedEgress.${name}.nodeName + "$")}
+                empty-fallback: REJECT
+            '') egressNames)}
 
             - name: PROXY
               type: select

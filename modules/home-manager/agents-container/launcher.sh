@@ -5,7 +5,7 @@ if (( $# )); then shift; fi
 # Updating the checkout needs neither Podman nor the container lifecycle lock.
 # Rebuild through the checkout afterwards: this launcher still pins old images.
 if [[ $command == update ]]; then
-  (( $# == 0 )) || { echo 'Usage: agents update (override checkout with HM_FLAKE)' >&2; exit 2; }
+  (( $# == 0 )) || { echo 'Usage: @commandName@ update (override checkout with HM_FLAKE)' >&2; exit 2; }
   flake=${HM_FLAKE:-}
   if [[ -z $flake ]]; then
     if [[ -f flake.nix ]]; then flake=$PWD; else flake=$HOME/.config/home-manager; fi
@@ -267,7 +267,7 @@ up() {
         return 1
       fi
       if [[ $init_enabled != true ]]; then
-        echo 'Workspace has no verified reaping init. Finish/save active sessions, then run agents rebuild on the host. No container was restarted.' >&2
+        echo 'Workspace has no verified reaping init. Finish/save active sessions, then run @commandName@ rebuild on the host. No container was restarted.' >&2
         return 1
       fi
     fi
@@ -278,7 +278,7 @@ up() {
   local secret_sources=${AGENTS_SECRET_SOURCES:-}
   [[ -n $secret_sources ]] || secret_sources='{}'
   # Keep plaintext on the host's per-login tmpfs, not in persistent container state.
-  local secret_directory=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/agents-container-secrets
+  local secret_directory=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/@commandName@-container-secrets
   python3 "$AGENTS_SECRET_HELPER" stage "$secret_sources" "$secret_directory"
   local -a clipboard_args=()
   if [[ $AGENTS_CLIPBOARD == 1 ]]; then
@@ -287,8 +287,8 @@ up() {
     for variable in WAYLAND_DISPLAY DISPLAY XAUTHORITY; do
       if [[ -n ${!variable:-} ]]; then systemctl --user import-environment "$variable"; fi
     done
-    systemctl --user start agents-clipboard.service
-    local clipboard_dir=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/agents-clipboard
+    systemctl --user start @commandName@-clipboard.service
+    local clipboard_dir=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/@commandName@-clipboard
     local ready=false
     for _ in {1..50}; do
       if [[ -S $clipboard_dir/socket ]]; then ready=true; break; fi
@@ -304,8 +304,8 @@ up() {
     for variable in PULSE_SERVER PULSE_COOKIE; do
       if [[ -n ${!variable:-} ]]; then systemctl --user import-environment "$variable"; fi
     done
-    systemctl --user start agents-sound.service
-    local sound_dir=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/agents-sound
+    systemctl --user start @commandName@-sound.service
+    local sound_dir=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/@commandName@-sound
     local sound_ready=false
     for _ in {1..50}; do
       if [[ -S $sound_dir/socket ]]; then sound_ready=true; break; fi
@@ -323,8 +323,8 @@ up() {
       XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_DATA_DIRS XDG_CONFIG_DIRS BROWSER PATH; do
       if [[ -n ${!variable:-} ]]; then systemctl --user import-environment "$variable"; fi
     done
-    systemctl --user start agents-web-links.service
-    local web_link_dir=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/agents-web-links
+    systemctl --user start @commandName@-web-links.service
+    local web_link_dir=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/@commandName@-web-links
     local web_link_ready=false
     for _ in {1..50}; do
       if [[ -S $web_link_dir/socket ]]; then web_link_ready=true; break; fi
@@ -423,7 +423,7 @@ up() {
   # Detached start is not entrypoint acceptance. Never restart on rejection.
   wait_workspace_ready || return 1
   prune_old_images
-  echo 'Workspace ready. Run: agents shell'
+  echo 'Workspace ready. Run: @commandName@ shell'
 }
 
 case "$command" in
@@ -442,11 +442,11 @@ case "$command" in
     tty_args=(-i)
     if [[ -t 0 && -t 1 ]]; then tty_args+=(-t); fi
     if [[ $command == shell ]]; then set -- @shellCommand@; fi
-    (( $# )) || { echo 'Usage: agents exec COMMAND [ARG...]' >&2; exit 2; }
+    (( $# )) || { echo 'Usage: @commandName@ exec COMMAND [ARG...]' >&2; exit 2; }
     exec "$AGENTS_PODMAN" exec "${tty_args[@]}" --user 1000:1000 "$work" /opt/agents/entrypoint "$@"
     ;;
   check)
-    running "$work" || { echo 'Run agents up first.' >&2; exit 1; }
+    running "$work" || { echo 'Run @commandName@ up first.' >&2; exit 1; }
     # $1 is the KVM flag passed to the container shell, not a host expansion.
     # shellcheck disable=SC2016
     p exec --user 1000:1000 "$work" /bin/bash -c '
@@ -463,9 +463,9 @@ case "$command" in
       echo
       dig +time=5 +tries=1 @1.1.1.1 example.com A
     ' agents-check "${AGENTS_KVM:-1}"
-    echo 'Compare with host US listener:'
+    echo 'Compare with host @proxyLabel@ listener:'
     curl --noproxy '' --proxy "$AGENTS_PROXY" --fail --max-time 20 https://api.ipify.org
     echo
     ;;
-  *) echo 'Usage: agents {up|down|rebuild|update|shell|exec COMMAND...|status|logs|doctor|check}' >&2; exit 2 ;;
+  *) echo 'Usage: @commandName@ {up|down|rebuild|update|shell|exec COMMAND...|status|logs|doctor|check}' >&2; exit 2 ;;
 esac
