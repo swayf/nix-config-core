@@ -143,7 +143,7 @@ def probe(value):
                 "curl", "--disable", "--silent", "--fail", "--noproxy", "",
                 "--proxy", f"socks5h://127.0.0.1:{port}", "--proto", "=https",
                 "--connect-timeout", "5", "--max-time", "15", "--output", "/dev/null",
-                "--write-out", "%{http_code}", "https://www.cloudflare.com/generate_204",
+                "--write-out", "%{http_code}", "https://cp.cloudflare.com/generate_204",
             ], env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20)
             if result.returncode or result.stdout != b"204" or process.poll() is not None:
                 raise ValueError("Selected client HTTPS probe failed")

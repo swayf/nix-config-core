@@ -199,7 +199,7 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual(command[1], "--disable")
             self.assertIn("socks5h://127.0.0.1:31001", command)
             self.assertIn("=https", command)
-            self.assertIn("https://www.cloudflare.com/generate_204", command)
+            self.assertIn("https://cp.cloudflare.com/generate_204", command)
             self.assertNotIn("--location", command)
             self.assertNotIn(node["uuid"], str(command))
             self.assertEqual(curl.call_args.kwargs["stderr"], P.subprocess.DEVNULL)
