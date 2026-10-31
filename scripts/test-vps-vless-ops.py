@@ -484,6 +484,218 @@ class OperationsTests(unittest.TestCase):
                     self.invoke("apply", "fixture", "--force")
             self.assertFalse(any("switch-to-configuration" in str(c) for c in calls))
 
+    def enable_client_provider_fixture(self):
+        binding = {"agents-lt": {"host": "fixture", "client": "default", "nodeName": "lt1-vps",
+                                 "stateFile": "mihomo/vps/agents-lt.json"}}
+        source = Path(self.tmp.name) / "bindings.json"
+        self.write(source, binding)
+        state = Path(self.tmp.name) / "desktop-state"
+        mock.patch.dict(os.environ, {"VPS_CLIENT_PROVIDERS": str(source), "XDG_STATE_HOME": str(state)}).start()
+        self.material["public_key"] = "A" * 43
+        self.material["clients"]["default"]["uuid"] = "12345678-1234-4234-8234-123456789012"
+        self.payload["material"] = json.dumps(self.material)
+        return state / "mihomo/vps/agents-lt.json"
+
+    def local_import_fixture(self):
+        path = self.enable_client_provider_fixture()
+        PREPARE_INPUTS(self.repo, "fixture")
+        helper = V.load(ROOT / "vps-client-provider.py", "import_provider_fixture")
+        real_load = V.load
+        mock.patch.object(V, "load", side_effect=lambda path, name:
+                          helper if Path(path).name == "vps-client-provider.py" else real_load(path, name)).start()
+        probe = mock.patch.object(helper, "probe").start()
+        return path, helper, probe
+
+    def test_local_import_probes_before_publication_without_ssh_build_or_config_edits(self):
+        path, helper, probe = self.local_import_fixture()
+        helper.write(path, helper.UNAVAILABLE)
+        previous = path.read_bytes()
+        # An unrelated binding must not cause import to prepare another client's credentials.
+        source = Path(os.environ["VPS_CLIENT_PROVIDERS"])
+        bindings = json.loads(source.read_text())
+        bindings["another"] = bindings["agents-lt"] | {"client": "alice", "stateFile": "mihomo/vps/another.json"}
+        self.write(source, bindings)
+        before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
+        def check(value):
+            self.assertEqual(path.read_bytes(), previous)
+            node, = value["proxies"]
+            self.assertEqual(node["uuid"], self.material["clients"]["default"]["uuid"])
+        probe.side_effect = check
+        self.invoke("client", "fixture", "import", "default", "--force")
+        self.assertEqual(probe.call_count, 1)
+        node, = json.loads(path.read_text())["proxies"]
+        self.assertEqual(node["server"], "203.0.113.8")
+        self.assertEqual(node["name"], "lt1-vps")
+        self.assertNotIn("PRIVATE", path.read_text() + self.output.getvalue())
+        self.assertNotIn("ALICE-UUID", path.read_text() + self.output.getvalue())
+        self.assertNotIn(node["uuid"], self.output.getvalue())
+        self.assertFalse((path.parent / "another.json").exists())
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        self.assertEqual(self.encrypted, [])
+        self.run.assert_not_called()
+        self.remote.assert_not_called()
+
+    def test_local_import_probe_failure_preserves_provider_and_discards_secret_diagnostics(self):
+        path, helper, probe = self.local_import_fixture()
+        helper.write(path, helper.UNAVAILABLE)
+        before = path.read_bytes(), path.stat().st_ino
+        probe.side_effect = V.Error("PRIVATE", details={"stderr": b"PRIVATE DEFAULT-UUID ALICE-UUID"})
+        with self.assertRaisesRegex(V.Error, "provider unchanged.*VPS unchanged") as caught:
+            self.invoke("client", "fixture", "import", "default", "--force")
+        self.assertEqual(before, (path.read_bytes(), path.stat().st_ino))
+        self.assertIsNone(caught.exception.__context__)
+        report = V.error_report(caught.exception, "client", "fixture")
+        self.assertTrue(report["redacted"])
+        self.assertNotIn("PRIVATE", json.dumps(report) + self.output.getvalue())
+        self.run.assert_not_called()
+        self.remote.assert_not_called()
+
+    def test_local_import_refusal_and_pin_mismatch_precede_decryption_and_probe(self):
+        path, helper, probe = self.local_import_fixture()
+        with mock.patch.object(O.Host, "decrypt") as decrypt:
+            with mock.patch.object(O.os, "isatty", return_value=True), mock.patch("builtins.input", return_value="no"):
+                with self.assertRaises(V.Error):
+                    self.invoke("client", "fixture", "import", "default")
+            lock = json.loads((self.repo / "flake.lock").read_text())
+            lock["nodes"]["core"]["locked"]["rev"] = "c" * 40
+            self.write(self.repo / "flake.lock", lock)
+            with self.assertRaisesRegex(V.Error, "pin mismatch"):
+                self.invoke("client", "fixture", "import", "default", "--force")
+            decrypt.assert_not_called()
+        probe.assert_not_called()
+        self.assertFalse(path.exists())
+
+    def test_local_import_rejects_unbound_wrong_or_disabled_client_and_address_override(self):
+        path, helper, probe = self.local_import_fixture()
+        for case in ("unbound", "wrong-client", "disabled", "address", "duplicate"):
+            with self.subTest(case=case), mock.patch.dict(os.environ):
+                client, extra = "default", []
+                if case == "unbound":
+                    os.environ["VPS_CLIENT_PROVIDERS"] = ""
+                elif case == "wrong-client":
+                    client = "alice"
+                elif case == "disabled":
+                    public = self.host().public | {"clients": ["alice"]}
+                    self.write(self.directory / "vless.json", public)
+                elif case == "address":
+                    extra = ["--address", "203.0.113.99"]
+                else:
+                    self.write(self.directory / "vless.json", self.host().public | {"clients": ["default", "alice"]})
+                    source = Path(os.environ["VPS_CLIENT_PROVIDERS"])
+                    binding = json.loads(source.read_text())["agents-lt"]
+                    self.write(source, {"agents-lt": binding, "duplicate": binding | {"stateFile": "mihomo/vps/other.json"}})
+                with self.assertRaises(V.Error):
+                    self.invoke("client", "fixture", "import", client, "--force", *extra)
+                self.assertFalse(path.exists())
+        probe.assert_not_called()
+        self.assertEqual(self.encrypted, [])
+        self.run.assert_not_called()
+        self.remote.assert_not_called()
+
+    def test_local_import_changed_sources_or_address_after_probe_prevent_publication(self):
+        path, helper, probe = self.local_import_fixture()
+        for changed in ("source", "address"):
+            def change(value):
+                if changed == "source":
+                    self.write(self.directory / "vless.json", self.host().public | {"serverName": "changed.example.org"})
+                else:
+                    self.write(self.directory / "plan.json", {"connection": {"address": "203.0.113.9"}})
+            probe.side_effect = change
+            with self.subTest(changed=changed), self.assertRaisesRegex(V.Error, "Configuration/address changed"):
+                self.invoke("client", "fixture", "import", "default", "--force")
+            self.assertFalse(path.exists())
+        self.run.assert_not_called()
+        self.remote.assert_not_called()
+
+    def test_local_import_publication_failure_has_no_secret_exception_chain(self):
+        path, helper, probe = self.local_import_fixture()
+        with mock.patch.object(helper, "write", side_effect=V.Error("PRIVATE", details={"stderr": b"PRIVATE"})):
+            with self.assertRaisesRegex(V.Error, "Local provider publication failed.*VPS unchanged") as caught:
+                self.invoke("client", "fixture", "import", "default", "--force")
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("PRIVATE", json.dumps(V.error_report(caught.exception, "client", "fixture")))
+        self.assertFalse(path.exists())
+
+    def test_local_import_obeys_mutation_lock(self):
+        path, helper, probe = self.local_import_fixture()
+        with (self.repo / ".vps.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(V.Error, "mutating VPS command"):
+                self.invoke("client", "fixture", "import", "default", "--force")
+        probe.assert_not_called()
+        self.assertFalse(path.exists())
+
+    def test_managed_provider_published_only_after_switch_and_service_success(self):
+        path = self.enable_client_provider_fixture()
+        calls = []
+        def run(command, **kwargs):
+            self.assertFalse(path.exists(), "No credentials published before remote success")
+            calls.append(command)
+            return SYSTEM.encode() if command[1] == "build" else b""
+        with mock.patch.object(O, "fingerprint", return_value="same"), mock.patch.object(O, "validate_runtime"), \
+                mock.patch.object(V, "run", side_effect=run), mock.patch.object(O.shutil, "which", return_value="/bin/ssh"):
+            self.invoke("apply", "fixture", "--force", "--address", "203.0.113.99")
+        node, = json.loads(path.read_text())["proxies"]
+        self.assertIn("systemctl is-active", str(calls[-1]))
+        self.assertEqual(node["server"], "203.0.113.8", "Administrative override must not replace desired endpoint")
+        self.assertEqual(node["name"], "lt1-vps")
+        self.assertNotIn("PRIVATE", path.read_text() + self.output.getvalue())
+        self.assertNotIn("ALICE-UUID", path.read_text() + self.output.getvalue())
+        self.assertFalse(any("restart" in str(c) or "9999" in str(c) for c in calls))
+
+    def test_managed_provider_check_failure_and_refusal_never_publish(self):
+        path = self.enable_client_provider_fixture()
+        for failure in ("check", "refusal", "switch", "services", "changed-after-switch"):
+            def run(command, **kwargs):
+                if failure == "switch" and "switch-to-configuration" in str(command):
+                    raise V.Error("fixture switch failure")
+                if failure == "services" and "systemctl is-active" in str(command):
+                    raise V.Error("fixture service failure")
+                return SYSTEM.encode() if command[1] == "build" else b""
+            digest = ["same", "same", "same", "changed"] if failure == "changed-after-switch" else None
+            with self.subTest(failure=failure), mock.patch.object(O, "fingerprint", side_effect=digest, return_value="same"), \
+                    mock.patch.object(O, "validate_runtime"), mock.patch.object(V, "run", side_effect=run), \
+                    mock.patch.object(O.shutil, "which", return_value="/bin/ssh"), \
+                    mock.patch.object(O.os, "isatty", return_value=True), mock.patch("builtins.input", return_value="no"):
+                if failure == "check":
+                    self.invoke("apply", "fixture", "--check")
+                else:
+                    with self.assertRaises(V.Error):
+                        self.invoke("apply", "fixture", *([] if failure == "refusal" else ["--force"]))
+                self.assertFalse(path.exists())
+
+    def test_managed_provider_preparation_failure_discards_secret_tool_diagnostics(self):
+        self.enable_client_provider_fixture()
+        with mock.patch.object(O.Host, "decrypt", side_effect=V.Error("PRIVATE", details={"stderr": b"PRIVATE"})):
+            with self.assertRaises(V.Error) as caught:
+                O.prepare_client_providers(V, self.host())
+        self.assertNotIn("PRIVATE", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertEqual(caught.exception.details, {})
+        report = V.error_report(caught.exception, "apply", "fixture")
+        self.assertTrue(report["redacted"])
+        self.assertNotIn("PRIVATE", json.dumps(report))
+
+    def test_managed_provider_publication_failure_reports_already_switched(self):
+        path = self.enable_client_provider_fixture()
+        prepared = O.prepare_client_providers(V, self.host())
+        path.parent.mkdir(parents=True, mode=0o755)
+        path.parent.chmod(0o755)
+        with self.assertRaisesRegex(V.Error, "VPS switched.*publication failed"):
+            O.publish_client_providers(V, self.host(), prepared)
+        self.assertFalse(path.exists())
+
+    def test_managed_provider_desired_address_change_prevents_publication(self):
+        path = self.enable_client_provider_fixture()
+        host = self.host()
+        prepared = O.prepare_client_providers(V, host)
+        self.write(self.directory / "plan.json", {"connection": {"address": "203.0.113.9"}})
+        with self.assertRaisesRegex(V.Error, "desired address changed"):
+            O.publish_client_providers(V, host, prepared)
+        self.assertFalse(path.exists())
+
     def test_native_host_local_operations_and_telegram(self):
         native = self.repo / "hosts/native"
         self.write(native / "vless.json", self.host().public)

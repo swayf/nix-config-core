@@ -151,9 +151,9 @@
         max = import ./modules/home-manager/desktop/max.nix;
         msWindowsFonts = import ./modules/home-manager/desktop/ms-windows-fonts.nix;
       };
-      lib.mkVpsCli = { pkgs, sourcePolicy, coreRevision, coreNarHash }:
+      lib.mkVpsCli = { pkgs, sourcePolicy, coreRevision, coreNarHash, clientProviders ? null }:
         pkgs.callPackage ./modules/nixos/vps-cli-package.nix {
-          inherit sourcePolicy coreRevision coreNarHash;
+          inherit sourcePolicy coreRevision coreNarHash clientProviders;
         };
       # Tool-owned source for explicit source/fixture use; never load code from --repo.
       lib.vpsCliSource = ./scripts;

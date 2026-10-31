@@ -172,6 +172,13 @@ class InputsTests(unittest.TestCase):
                 registry = repo / "hosts/generated/inventory.json"
                 registry.write_text(json.dumps({"fixture": {"system": "x86_64-linux"}, "other": {}}))
                 self.assertEqual(V.source_digest(repo, "fixture"), before)
+                bindings = repo / "client-bindings.json"
+                bindings.write_text("{}")
+                with patch.dict(os.environ, {"VPS_CLIENT_PROVIDERS": str(bindings)}):
+                    bound = V.source_digest(repo, "fixture")
+                    self.assertNotEqual(bound, before)
+                    bindings.write_text('{"changed": {}}')
+                    self.assertNotEqual(V.source_digest(repo, "fixture"), bound)
                 policy.write_text(json.dumps(value | {"legacyAdminUser": "another"}))
                 self.assertNotEqual(V.source_digest(repo, "fixture"), before)
                 policy.write_text(json.dumps(value))

@@ -5,6 +5,8 @@ let
     fileset = pkgs.lib.fileset.unions [
       ../scripts/vps.py
       ../scripts/vps-vless-ops.py
+      ../scripts/vps-client-provider.py
+      ../scripts/test-vps-client-provider.py
       ../scripts/vps-probe.py
       ../scripts/vps-warp.py
       ../scripts/vps-wgcf.py
@@ -34,6 +36,7 @@ in pkgs.runCommand "vps-cli-safety-tests" {
   export XDG_STATE_HOME="$TMPDIR/state"
   python3 ${source}/scripts/test-vps.py > safety.log 2>&1 || { tail -60 safety.log; exit 1; }
   python3 ${source}/scripts/test-vps-vless-ops.py
+  python3 ${source}/scripts/test-vps-client-provider.py
   python3 ${source}/scripts/test-vps-source.py
   python3 ${source}/scripts/test-vps-warp.py
   python3 ${source}/tests/test-vps-cli-boundary.py

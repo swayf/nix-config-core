@@ -37,7 +37,7 @@ def add_parsers(sub, formatter):
     for name in sorted(COMMANDS):
         q = sub.add_parser(name, formatter_class=formatter, help={
             "list": "list local public VLESS hosts/clients; no secrets or SSH",
-            "client": "edit local clients or explicitly export one secret link; no deploy",
+            "client": "edit clients, export a link or import a verified local provider; no deploy",
             "telegram": "set/disable local Telegram binding; hidden token prompt, no deploy",
             "ssh": "open an administrative SSH session",
             "tunnel": "foreground loopback-only SSH tunnel; Ctrl-C closes it",
@@ -48,7 +48,7 @@ def add_parsers(sub, formatter):
         }[name])
         q.add_argument("name", nargs="?" if name == "list" else None, metavar="HOST")
         if name == "client":
-            q.add_argument("action", choices=("add", "remove", "link", "rotate", "sync"))
+            q.add_argument("action", choices=("add", "remove", "link", "rotate", "sync", "import"))
             q.add_argument("client", nargs="?", help="client name; omit only for sync")
             q.add_argument("--address", help="public IPv4 endpoint override for link (default: saved plan or caller-owned native address source)")
         if name == "telegram":
@@ -215,6 +215,8 @@ def client(v, args, host):
             raise v.Error("client sync does not take a client name")
     elif not name or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", name):
         raise v.Error("Expected a lowercase client name (up to 64 characters)")
+    if args.action == "import":
+        return import_client_provider(v, args, host)
     if args.action == "remove":
         if name == "default":
             raise v.Error("Keep the default diagnostic client required by profile check/verify")
@@ -420,6 +422,79 @@ def validate_runtime(v, host):
         v.run([package + "/bin/xray", "run", "-test", "-config", path], timeout=20)
 
 
+def prepare_client_providers(v, host, *, client=None):
+    helper = v.load(v.SOURCE / "vps-client-provider.py", "vps_client_provider")
+    selected = {name: binding for name, binding in helper.bindings().items()
+                if binding["host"] == host.name and (client is None or binding["client"] == client)}
+    if not selected:
+        return []
+    # Snapshot desired address, not --address (the current administrative endpoint).
+    address = host.address()
+    try:
+        material = json.loads(host.decrypt(host.secret)["material"])
+        return [(helper.destination(binding, host.repo),
+                 helper.project(binding, host.public, material, address), address)
+                for binding in selected.values()]
+    except Exception:
+        pass
+    # Raise OUTSIDE except: diagnostics deliberately traverse __context__, even
+    # for `from None`. No secret tool stderr may survive in this error's chain.
+    raise v.Error("Managed client preparation failed; details withheld; no providers published")
+
+
+def publish_client_providers(v, host, prepared):
+    if not prepared:
+        return
+    helper = v.load(v.SOURCE / "vps-client-provider.py", "vps_client_provider")
+    if any(address != host.address() for _, _, address in prepared):
+        raise v.Error("VPS switched but desired address changed; managed providers NOT published")
+    published = False
+    try:
+        for path, projection, _ in prepared:
+            helper.write(path, projection)
+        published = True
+    except Exception:
+        pass
+    if not published:
+        raise v.Error("VPS switched but managed provider publication failed; no automatic rollback; details withheld")
+    print("Client-only Mihomo providers published locally (0600); file watcher consumption remains unverified.")
+
+
+def import_client_provider(v, args, host):
+    """Explicit bootstrap from existing local credentials; never apply to the VPS."""
+    if args.address:
+        raise v.Error("client import uses the managed endpoint; --address is only supported by client link")
+    before = fingerprint(v, host)
+    print("Local import probes HTTPS, then replaces one local provider. No SSH, VPS apply or service restart.")
+    confirm(v, "IMPORT " + host.name + " " + args.client, args.force)
+    prepared = prepare_client_providers(v, host, client=args.client)
+    if len(prepared) != 1 or prepared[0][1]["proxies"][0]["type"] != "vless":
+        raise v.Error("Exactly one pinned provider for an enabled client is required; no providers published")
+    path, projection, address = prepared[0]
+    helper = v.load(v.SOURCE / "vps-client-provider.py", "vps_client_provider")
+    verified = False
+    try:
+        helper.probe(projection)
+        verified = True
+    except Exception:
+        pass
+    # Discard all secret-bearing tool errors, including nested diagnostic chains.
+    if not verified:
+        raise v.Error("Local client probe failed; details withheld; provider unchanged; VPS unchanged; no apply attempted")
+    if fingerprint(v, host) != before or host.address() != address:
+        raise v.Error("Configuration/address changed during probe; provider unchanged; repeat after review")
+    published = False
+    try:
+        helper.write(path, projection)
+        published = True
+    except Exception:
+        pass
+    if not published:
+        raise v.Error("Local provider publication failed; details withheld; VPS unchanged")
+    print("Verified client-only provider imported locally (0600). VPS unchanged; live Mihomo/ALT1 remain unverified.")
+    return 0
+
+
 def apply(v, args, host):
     before = fingerprint(v, host)
     print("Building and validating locally; VPS unchanged.", flush=True)
@@ -429,6 +504,7 @@ def apply(v, args, host):
     if not re.fullmatch(r"/nix/store/[a-z0-9]{32}-[^/\s]+", built):
         raise v.Error("Unexpected system build output")
     validate_runtime(v, host)
+    prepared = prepare_client_providers(v, host)
     if fingerprint(v, host) != before:
         raise v.Error("Configuration changed during build; repeat apply after review")
     print("Local build and secret-backed Xray validation passed; live VLESS/WARP/Telegram remain unverified.")
@@ -452,12 +528,15 @@ def apply(v, args, host):
         v.run(["nix", "copy", "--no-check-sigs", "--to",
                "ssh-ng://" + c["user"] + "@" + c["address"] + "?remote-program=sudo%20-n%20/run/current-system/sw/bin/nix-daemon",
                built], env=env, timeout=1800)
-        if fingerprint(v, host) != before:
-            raise v.Error("Configuration changed before switch; closure copied but not activated")
+        if fingerprint(v, host) != before or any(address != host.address() for _, _, address in prepared):
+            raise v.Error("Configuration/address changed before switch; closure copied but not activated")
         command = ("sudo -n /run/current-system/sw/bin/nix-env -p /nix/var/nix/profiles/system --set "
                    + shlex.quote(built) + " && sudo -n " + shlex.quote(built + "/bin/switch-to-configuration") + " switch")
         v.run(v.ssh_args(c) + [command], timeout=300)
         v.run(v.ssh_args(c) + ["systemctl is-active xray prometheus grafana alertmanager"], timeout=30)
+    if prepared and fingerprint(v, host) != before:
+        raise v.Error("VPS switched but configuration changed; managed providers NOT published")
+    publish_client_providers(v, host, prepared)
     print("Generation switched. Verify clients, WARP and Telegram separately; no automatic rollback.")
     return 0
 

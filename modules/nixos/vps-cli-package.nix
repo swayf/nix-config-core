@@ -1,4 +1,4 @@
-{ lib, callPackage, writeShellApplication, python3, nix, git, openssh, sshpass, openssl, sops, age, ssh-to-age, wgcf, curl, rendererSource ? ./xray-render.py, sourcePolicy, coreRevision, coreNarHash }:
+{ lib, callPackage, writeShellApplication, python3, nix, git, openssh, sshpass, openssl, sops, age, ssh-to-age, wgcf, curl, mihomo, rendererSource ? ./xray-render.py, sourcePolicy, coreRevision, coreNarHash, clientProviders ? null }:
 let
   installerTools = callPackage ./vps-installer-tools.nix { };
   # Ubuntu has no Nix loader/store: ship a pure-Go, static Linux binary over SSH.
@@ -10,7 +10,7 @@ let
     name = "vps-tools";
     filter = path: type: type == "directory" || builtins.elem (baseNameOf path) [
       "vps.py" "vps-vless-ops.py" "vps-probe.py" "vps-warp.py" "vps-credentials.py" "vps-wgcf.py"
-      "vps-inputs.py" "vps-state.py" "deployment-lib.py" "vps-policy.py"
+      "vps-inputs.py" "vps-state.py" "deployment-lib.py" "vps-policy.py" "vps-client-provider.py"
     ];
   };
 in writeShellApplication {
@@ -21,6 +21,12 @@ in writeShellApplication {
     export VPS_INSTALLER_TOOLS="${installerTools}"
     export VPS_XRAY_RENDERER="${rendererSource}"
     export VPS_CLI_POLICY=${sourcePolicy}
+    ${if clientProviders == null then ''
+      unset VPS_CLIENT_PROVIDERS VPS_MIHOMO_BINARY
+    '' else ''
+      export VPS_CLIENT_PROVIDERS=${clientProviders}
+      export VPS_MIHOMO_BINARY=${lib.getExe mihomo}
+    ''}
     export VPS_CORE_REV=${lib.escapeShellArg coreRevision}
     export VPS_CORE_NAR_HASH=${lib.escapeShellArg coreNarHash}
     exec python3 ${source}/vps.py "$@"

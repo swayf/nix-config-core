@@ -23,8 +23,10 @@ let
   hasHwid = hasSecret "mhhwid";
 
   providers = lib.optional hasSub "sub" ++ lib.optional hasNodes "own";
-  enabled = providers != [ ];
+  enabled = providers != [ ] || managedEgressNames != [];
   egressNames = builtins.attrNames cfg.fixedEgress;
+  managedEgressNames = lib.filter (name: cfg.fixedEgress.${name}.providerFile != null) egressNames;
+  ownEgressNames = lib.subtractLists managedEgressNames egressNames;
   listenerPorts = [ cfg.mixedPort 9999 ]
     ++ lib.optional cfg.us.enable cfg.us.port
     ++ lib.optional cfg.direct.enable cfg.direct.port
@@ -83,6 +85,13 @@ let
 
   proxyProviders = lib.concatStringsSep "\n\n" (
     lib.optional hasSub subProvider ++ lib.optional hasNodes ownProvider
+    ++ map (name: ''
+      fixed-${name}:
+        type: file
+        path: ${builtins.toJSON cfg.fixedEgress.${name}.providerFile}
+        health-check:
+          enable: false
+    '') managedEgressNames
   );
 
   sub-decode = pkgs.writeShellApplication {
@@ -351,12 +360,17 @@ in
 
     fixedEgress = lib.mkOption {
       default = {};
-      description = "Additional loopback-only listeners, each pinned to one exact private node with REJECT on an empty provider match.";
+      description = "Additional loopback-only listeners, each pinned to one exact node in mhnodes or an isolated managed file provider, with REJECT on an empty match.";
       type = lib.types.attrsOf (lib.types.submodule ({ config, ... }: {
         options = {
           nodeName = lib.mkOption {
             type = lib.types.strMatching "[A-Za-z0-9_-]+";
-            description = "Exact node label in mhnodes, not a regular expression or credential.";
+            description = "Exact node label in the selected provider, not a regular expression or credential.";
+          };
+          providerFile = lib.mkOption {
+            type = lib.types.nullOr (lib.types.strMatching "/[^\n]+");
+            default = null;
+            description = "Absolute client-only JSON/YAML provider path below the Mihomo state directory's vps/ (string, never imported into the Nix store). Null preserves mhnodes. File updates are watched by Mihomo; missing files are seeded with a nonmatching reject node.";
           };
           port = lib.mkOption { type = lib.types.port; };
           httpProxy = lib.mkOption {
@@ -417,8 +431,16 @@ in
   config = {
     assertions = [
       {
-        assertion = egressNames == [] || hasNodes;
-        message = "services.mihomo.fixedEgress requires the private mhnodes secret.";
+        assertion = ownEgressNames == [] || hasNodes;
+        message = "services.mihomo.fixedEgress without providerFile requires the private mhnodes secret.";
+      }
+      {
+        assertion = lib.all (name: let e = cfg.fixedEgress.${name}; in
+          e.nodeName != "__unavailable__" && lib.hasPrefix "${workDir}/vps/" e.providerFile
+          && lib.all (part: part != "." && part != "..") (lib.splitString "/" e.providerFile)
+          && !lib.hasInfix "//" e.providerFile && !lib.hasSuffix "/" e.providerFile
+        ) managedEgressNames;
+        message = "Managed Mihomo providers require normalized paths below the Mihomo state directory's vps/ and a non-sentinel node name.";
       }
       {
         assertion = lib.all (name: builtins.match "[a-z][a-z0-9-]*" name != null) egressNames;
@@ -570,7 +592,7 @@ in
 
               - name: egress-${name}
                 type: select
-                use: [ own ]
+                use: [ ${if cfg.fixedEgress.${name}.providerFile == null then "own" else "fixed-${name}"} ]
                 filter: ${builtins.toJSON ("^" + cfg.fixedEgress.${name}.nodeName + "$")}
                 empty-fallback: REJECT
             '') egressNames)}
@@ -581,7 +603,7 @@ in
               use: [ ${lib.concatStringsSep ", " providers} ]
 
             - name: AUTO
-              type: url-test
+              type: url-test${lib.optionalString (providers == []) "\n    proxies: [ REJECT ]"}
               use: [ ${lib.concatStringsSep ", " providers} ]
               url: https://cp.cloudflare.com/generate_204
               interval: 300
@@ -628,6 +650,9 @@ in
 
         Restart = "on-failure";
         RestartSec = 10;
+      } // lib.optionalAttrs (managedEgressNames != []) {
+        ExecStartPre = lib.escapeShellArgs ([ "${pkgs.python3}/bin/python3" "${../../scripts/vps-client-provider.py}" ]
+          ++ map (name: cfg.fixedEgress.${name}.providerFile) managedEgressNames);
       };
 
       Install.WantedBy = [ "default.target" ];

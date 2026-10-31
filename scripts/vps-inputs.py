@@ -8,7 +8,8 @@ from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parent
 TOOL_FILES = ("vps.py", "vps-vless-ops.py", "vps-probe.py", "vps-warp.py", "vps-wgcf.py",
-              "vps-credentials.py", "vps-inputs.py", "vps-state.py", "deployment-lib.py", "vps-policy.py")
+              "vps-credentials.py", "vps-inputs.py", "vps-state.py", "deployment-lib.py", "vps-policy.py",
+              "vps-client-provider.py")
 
 
 def library():
@@ -49,6 +50,12 @@ def digest(repo, name, directory, secret, monitoring):
         files += [repo / filename for filename in policy["nativeFiles"]]
     digest = hashlib.sha256(b"vps-selected-inputs-v3\0")
     digest.update(json.dumps(policy, sort_keys=True).encode())
+    bindings = os.environ.get("VPS_CLIENT_PROVIDERS")
+    if bindings:
+        path = Path(bindings)
+        if not path.is_absolute() or path.is_symlink() or not path.is_file():
+            raise ValueError("Pinned client bindings unavailable")
+        digest.update(b"client-providers\0" + path.read_bytes())
     digest.update(json.dumps(lock, sort_keys=True).encode())
     if generated:
         registry = json.loads((repo / "hosts/generated/inventory.json").read_text())

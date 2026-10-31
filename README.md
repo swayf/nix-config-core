@@ -79,7 +79,7 @@ SOFTWARE.
 
 ## VPS CLI API (local B3)
 
-`lib.mkVpsCli { pkgs; sourcePolicy; coreRevision; coreNarHash; }` builds
+`lib.mkVpsCli { pkgs; sourcePolicy; coreRevision; coreNarHash; clientProviders ? null; }` builds
 `vps-vless` with the caller's package set and an immutable tool/core pin.
 `sourcePolicy` is a caller-owned JSON path with exactly these fields:
 
@@ -100,6 +100,46 @@ Renderer and Python helpers come from the tool, never executable Python from
 `--repo`. Policy, selected lock graph, selected declarations, ciphertext and tool
 sources participate in the receipt digest; unrelated reports/hosts do not.
 A changed source digest invalidates old checks, not installation-attempt markers.
+
+Optional `clientProviders` pins a caller-owned JSON path with entries shaped as
+`NAME: { host, client, nodeName, stateFile }`. `stateFile` must be relative below
+`mihomo/vps/` in the invoking user's XDG state directory, outside the checkout
+and store. A successful managed `apply` (switch plus remote service checks)
+atomically publishes a 0600 client-only Mihomo file provider in a 0700 directory.
+Preparation validates before switching; `--check`, refusal, failed apply and local
+client edits do not publish. A removed client projects a nonmatching reject node,
+not an empty provider (Mihomo rejects empty providers and may retain old contents).
+Only the selected UUID, public REALITY parameters and desired endpoint are
+serialized; never the server private key or other clients. Desired address comes
+from the managed host, not the administrative `--address` override. Bindings and
+the helper participate in the source digest. The projection is not passed to
+Nix, command arguments, stdout or store sources; preparation errors discard
+secret tool stderr and nested exception chains before diagnostics.
+
+For an existing deployed client, `client HOST import CLIENT` is an explicit local
+bootstrap without SSH, deploy, server apply or live Mihomo API/restart. It requires
+exactly one pinned binding for that enabled host/client and the same tool/core pin
+check as apply. A short-lived isolated Mihomo uses only the selected projection
+(no DIRECT/fallback), with private temporary config and suppressed process output.
+A fixed HTTPS probe must return 204 before atomic publication; refusal, timeout,
+failed probe or changed source/address leaves the previous provider untouched.
+The package pins `VPS_MIHOMO_BINARY` from the caller's package set for bound CLIs.
+A passing probe establishes client connectivity, not full desired/deployed equality;
+local un-applied credentials can fail, and failure never triggers a server apply.
+This operation does not rotate/edit credentials, accept `--address`, or change the
+normal automatic publication-after-apply trigger.
+
+Pair this with `services.mihomo.fixedEgress.NAME.providerFile` and the same exact
+`nodeName`. The file must be below Mihomo's state `vps/` directory; startup seeds
+a missing file with the nonmatching reject node. Mihomo's file watcher consumes
+atomic updates without CLI API calls, activation or service restarts. Neither
+publication path acknowledges live watcher consumption, migrates existing
+connections, or follows remote-only changes. The local import probe does not test
+live ALT1, UDP/DNS routing or revocation. A post-switch publication failure is
+an explicit partial failure, not an automatic rollback. Run the CLI as the same
+local user with the same HOME/XDG state as Mihomo; this is not remote distribution.
+An unbound CLI explicitly unsets ambient `VPS_CLIENT_PROVIDERS` and
+`VPS_MIHOMO_BINARY`.
 
 `lib.vpsCliSource` exposes tool-owned scripts for explicit source/fixture use.
 Source execution requires `VPS_CLI_POLICY`, `VPS_CORE_REV` and `VPS_CORE_NAR_HASH`;
