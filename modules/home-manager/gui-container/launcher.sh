@@ -8,17 +8,20 @@ if [[ ${GCNT_WAYLAND_SOCKET+x} ]]; then
 fi
 command=${1:-up}
 if (( $# )); then shift; fi
+# Defaults preserve the original single-instance command and names.
+cli=${GUI_COMMAND:-gcnt}
+egress=${GUI_EGRESS_LABEL:-US}
 usage() {
-  echo 'Usage: gcnt {up|down|rebuild|update|shell|firefox [ARG...]|brave [ARG...]|chrome [ARG...]|PROFILE [ARG...]|profiles [firefox|brave|chrome]|exec COMMAND...|status|stats|logs|doctor|check|help}'
+  echo "Usage: $cli {up|down|rebuild|update|shell|firefox [ARG...]|brave [ARG...]|chrome [ARG...]|PROFILE [ARG...]|profiles [firefox|brave|chrome]|exec COMMAND...|status|stats|logs|doctor|check|help}"
 }
 case "$command" in
   up|down|rebuild|update|status|stats|logs|doctor|check|shell|help|--help|-h) (( $# == 0 )) || { echo "Unexpected arguments for $command" >&2; exit 2; } ;;
   profiles)
     (( $# <= 1 )) && [[ ${1-firefox} == firefox || ${1-firefox} == brave || ${1-firefox} == chrome ]] || {
-      echo 'Usage: gcnt profiles [firefox|brave|chrome]' >&2; exit 2;
+      echo "Usage: $cli profiles [firefox|brave|chrome]" >&2; exit 2;
     }
     ;;
-  exec) (( $# )) || { echo 'Usage: gcnt exec COMMAND [ARG...]' >&2; exit 2; } ;;
+  exec) (( $# )) || { echo "Usage: $cli exec COMMAND [ARG...]" >&2; exit 2; } ;;
   firefox|brave|chrome) set -- "$command" "$@"; command='exec' ;;
   *)
     # Only declared profiles are shortcuts; never execute arbitrary command names.
@@ -61,27 +64,27 @@ case "$command" in
       '  profiles [firefox|brave|chrome]  List default and declared profiles by browser; no container needed.' \
       '  down     Remove containers, not persistent data.' \
       '  status/stats/logs  Inspect containers, CPU/RAM or logs.' \
-      '  doctor/check      Check host prerequisites or US egress.' \
-      '  All except help/profiles/update clean stopped gcnt containers and unused old gcnt images.'
+      "  doctor/check      Check host prerequisites or $egress egress." \
+      "  All except help/profiles/update clean stopped $cli containers and unused old $cli images."
     if [[ -n ${GUI_BROWSER_PROFILES:-} ]]; then
       printf '  Profiles: %s\n' "$GUI_BROWSER_PROFILES"
     fi
     printf '%s\n' \
       '' \
       'Applications and agents (inside the container):' \
-      '  gcnt exec antigravity                 Antigravity App: manage agents and projects.' \
-      '  gcnt exec antigravity-ide [OPTIONS] [PATH...]  Antigravity IDE: edit files/projects.' \
-      '  gcnt exec chatgpt                     ChatGPT: choose Work or Codex in the app.' \
+      "  $cli exec antigravity                 Antigravity App: manage agents and projects." \
+      "  $cli exec antigravity-ide [OPTIONS] [PATH...]  Antigravity IDE: edit files/projects." \
+      "  $cli exec chatgpt                     ChatGPT: choose Work or Codex in the app." \
       '  These agent apps require programs.gui-container.packages; they are not bundled by default.' \
-      '  App/ChatGPT projects, models and agent modes are selected in their GUI, not by gcnt flags.' \
-      '  gcnt exec foot                        Open a container terminal.' \
-      '  gcnt exec thunar /shared              Open the shared folder.' \
-      '  gcnt exec PROGRAM [ARG...]            Run any other program installed in the image.' \
-      '  Arguments after PROGRAM are passed unchanged to it; they are not gcnt options.' \
+      "  App/ChatGPT projects, models and agent modes are selected in their GUI, not by $cli flags." \
+      "  $cli exec foot                        Open a container terminal." \
+      "  $cli exec thunar /shared              Open the shared folder." \
+      "  $cli exec PROGRAM [ARG...]            Run any other program installed in the image." \
+      "  Arguments after PROGRAM are passed unchanged to it; they are not $cli options." \
       '  Use container paths: /shared/PROJECT maps to sharedDirectory/PROJECT on the host.' \
       '  Host paths/dot are not translated; the host HOME is not mounted. Use /shared/PROJECT.' \
       '' \
-      'Antigravity IDE options (after gcnt exec antigravity-ide; not App/ChatGPT options):' \
+      "Antigravity IDE options (after $cli exec antigravity-ide; not App/ChatGPT options):" \
       '  -n, --new-window                      Open a new window.' \
       '  -r, --reuse-window                    Open in the last active window.' \
       '  -g, --goto FILE:LINE[:COLUMN]          Open a file at a line/column.' \
@@ -92,10 +95,10 @@ case "$command" in
       '  -h, --help                            List all options supported by the installed IDE.' \
       '' \
       'Examples:' \
-      '  gcnt exec antigravity-ide --new-window /shared/my-project' \
-      '  gcnt exec antigravity-ide --goto /shared/my-project/main.py:42:1' \
-      '  gcnt exec antigravity-ide --help' \
-      '  gcnt help only prints this help; exec commands may prepare/start the container.'
+      "  $cli exec antigravity-ide --new-window /shared/my-project" \
+      "  $cli exec antigravity-ide --goto /shared/my-project/main.py:42:1" \
+      "  $cli exec antigravity-ide --help" \
+      "  $cli help only prints this help; exec commands may prepare/start the container."
     exit 0
     ;;
   update)
@@ -137,8 +140,8 @@ exec 9>"$GUI_STATE/lock"
 flock 9
 # conmon and the session must not inherit the lifecycle lock.
 p() { "$GUI_PODMAN" "$@" 9>&-; }
-work=hm-gui
-gateway=hm-gui-gateway
+work=${GUI_CONTAINER:-hm-gui}
+gateway=$work-gateway
 running() { [[ $(p inspect --format '{{.State.Running}}' "$1" 2>/dev/null) == true ]]; }
 remove_containers() {
   if p container exists "$work"; then p rm -f "$work"; fi
@@ -369,7 +372,7 @@ up() {
   fi
   trap - ERR
   cleanup_unused
-  echo 'Wayland/WSLg container ready (no windows opened). Run: gcnt firefox, brave, chrome or exec PROGRAM'
+  echo "Wayland/WSLg container ready (no windows opened). Run: $cli firefox, brave, chrome or exec PROGRAM"
 }
 # Inspect/stop commands clean under the lifecycle lock, before using resources.
 # Start/rebuild clean only after successful preparation, preserving the old
@@ -386,11 +389,11 @@ case "$command" in
     load_images
     remove_containers
     cleanup_unused
-    echo 'Images ready; containers stopped. Run: gcnt shell, exec, firefox, brave or chrome'
+    echo "Images ready; containers stopped. Run: $cli shell, exec, firefox, brave or chrome"
     ;;
   down) remove_containers; cleanup_unused ;;
   doctor) doctor ;;
-  status) p ps -a --filter 'name=^hm-gui($|-gateway$)' ;;
+  status) p ps -a --filter "name=^$work(\$|-gateway\$)" ;;
   stats)
     # Do not hold up rebuild/down while collecting resource counters.
     flock -u 9
@@ -415,13 +418,13 @@ case "$command" in
     ;;
   check)
     if ! running "$work" || ! running "$gateway"; then
-      echo 'Run gcnt up first.' >&2; exit 1
+      echo "Run $cli up first." >&2; exit 1
     fi
     echo 'Container (no application proxy settings):'
     p exec "$work" /bin/curl --noproxy '*' --fail --max-time 20 https://api.ipify.org
     echo
     p exec "$work" /bin/dig +time=5 +tries=1 @1.1.1.1 example.com A
-    echo 'Host US listener:'
+    echo "Host $egress listener:"
     curl --noproxy '' --proxy "$GUI_PROXY" --fail --max-time 20 https://api.ipify.org
     echo
     ;;

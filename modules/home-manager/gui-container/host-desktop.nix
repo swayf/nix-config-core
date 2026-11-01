@@ -3,10 +3,15 @@
 {
   gcnt,
   browserProfiles,
+  commandName ? "gcnt",
+  egressLabel ? "US",
   lib,
   pkgs,
 }:
 let
+  # The default instance keeps its existing desktop IDs and labels.
+  idPrefix = if commandName == "gcnt" then "gui-container" else commandName;
+  label = lib.toUpper commandName;
   icons = {
     firefox = "${pkgs.firefox}/share/icons/hicolor/128x128/apps/firefox.png";
     brave = "${pkgs.brave}/share/icons/hicolor/128x128/apps/brave-browser.png";
@@ -14,22 +19,22 @@ let
   };
   entry = name: command: icon: {
     inherit name icon;
-    exec = "${gcnt}/bin/gcnt ${command}";
-    comment = "Container application with US-only egress";
+    exec = "${gcnt}/bin/${commandName} ${command}";
+    comment = "Container application with ${egressLabel}-only egress";
     terminal = false;
     categories = [ "Network" ];
     startupNotify = false;
   };
 in
 {
-  gui-container =
-    entry "GCNT · Terminal (US tunnel)" "exec foot"
+  ${idPrefix} =
+    entry "${label} · Terminal (${egressLabel} tunnel)" "exec foot"
       "${pkgs.foot}/share/icons/hicolor/48x48/apps/foot.png";
-  gui-container-firefox = entry "GCNT · Firefox (US tunnel)" "firefox" icons.firefox;
-  gui-container-brave = entry "GCNT · Brave (US tunnel)" "brave" icons.brave;
-  gui-container-chrome = entry "GCNT · Google Chrome (US tunnel)" "chrome" icons.chrome;
-  gui-container-files =
-    (entry "GCNT · Files (Thunar)" "exec thunar /shared"
+  "${idPrefix}-firefox" = entry "${label} · Firefox (${egressLabel} tunnel)" "firefox" icons.firefox;
+  "${idPrefix}-brave" = entry "${label} · Brave (${egressLabel} tunnel)" "brave" icons.brave;
+  "${idPrefix}-chrome" = entry "${label} · Google Chrome (${egressLabel} tunnel)" "chrome" icons.chrome;
+  "${idPrefix}-files" =
+    (entry "${label} · Files (Thunar)" "exec thunar /shared"
       "${pkgs.thunar}/share/icons/hicolor/128x128/apps/org.xfce.thunar.png"
     )
     // {
@@ -41,8 +46,8 @@ in
 }
 // lib.mapAttrs' (
   name: profile:
-  lib.nameValuePair "gui-container-profile-${name}" (
-    entry "GCNT · ${profile.label}" "exec gcnt-profile-${name}" (
+  lib.nameValuePair "${idPrefix}-profile-${name}" (
+    entry "${label} · ${profile.label}" "exec gcnt-profile-${name}" (
       if profile.icon == null then icons.${profile.browser} else profile.icon
     )
   )

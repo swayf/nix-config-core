@@ -6,6 +6,7 @@
   browserProfiles ? { },
   browserPolicies ? { firefox = { }; brave = { }; chrome = { }; },
   timeZone ? "UTC",
+  imageName ? "localhost/hm-gui",
 }:
 assert builtins.match "[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*" timeZone != null;
 let
@@ -133,7 +134,7 @@ let
 in
 # Keep only the stream executable in the store, not a duplicate image tarball.
 pkgs.dockerTools.streamLayeredImage {
-  name = "localhost/hm-gui";
+  name = imageName;
   # Fewer overlay layers; keep some granularity for reuse between rebuilds.
   maxLayers = 16;
   contents = [ root ];

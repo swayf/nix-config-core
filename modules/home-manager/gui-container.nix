@@ -6,16 +6,26 @@
 }:
 let
   cfg = config.programs.gui-container;
+  # Lazy: an explicit loopback port needs no Mihomo module in this evaluation.
+  proxy =
+    if cfg.proxy.port == null then
+      { inherit (config.services.mihomo.us) port httpProxy; }
+    else
+      {
+        inherit (cfg.proxy) port;
+        httpProxy = "http://127.0.0.1:${toString cfg.proxy.port}";
+      };
   image = import ./gui-container/image.nix {
     inherit pkgs lib;
     inherit (cfg) packages browserProfiles browserPolicies timeZone;
+    imageName = "localhost/${cfg.containerName}";
     gpu = cfg.graphics.autoDetect || cfg.graphics.renderDevice != null;
   };
   gateway = import ./container-gateway.nix {
     inherit pkgs lib;
-    port = config.services.mihomo.us.port;
+    inherit (proxy) port;
     # Deliberately no directPort, even when host DIRECT is enabled for agents.
-    name = "localhost/hm-gui-gateway";
+    name = "localhost/${cfg.containerName}-gateway";
     # pasta mirrors host interfaces: do not collide with a host VPN's tun0.
     tunDevice = "gui-tun";
   };
@@ -28,6 +38,9 @@ let
       pkgs.nix
     ];
     text = ''
+      export GUI_COMMAND=${lib.escapeShellArg cfg.commandName}
+      export GUI_CONTAINER=${lib.escapeShellArg cfg.containerName}
+      export GUI_EGRESS_LABEL=${lib.escapeShellArg cfg.proxy.label}
       export GUI_FLAKE_OUTPUT=${lib.escapeShellArg cfg.flakeOutput}
       export GUI_PODMAN=${lib.escapeShellArg cfg.podmanExecutable}
       export GUI_STATE=${lib.escapeShellArg cfg.stateDirectory}
@@ -41,7 +54,7 @@ let
       export GUI_IMAGE_REF=${image.imageName}:${image.imageTag}
       export GUI_GATEWAY_IMAGE=${gateway}
       export GUI_GATEWAY_REF=${gateway.imageName}:${gateway.imageTag}
-      export GUI_PROXY=${lib.escapeShellArg config.services.mihomo.us.httpProxy}
+      export GUI_PROXY=${lib.escapeShellArg proxy.httpProxy}
       export GUI_GPU=${
         lib.escapeShellArg (if cfg.graphics.renderDevice == null then "" else cfg.graphics.renderDevice)
       }
@@ -68,7 +81,7 @@ let
     '';
   };
   gcnt = pkgs.writeShellApplication {
-    name = "gcnt";
+    name = cfg.commandName;
     text = ''
       exec ${launcher}/bin/gui-container "$@"
     '';
@@ -95,6 +108,34 @@ in
   ];
   options.programs.gui-container = {
     enable = lib.mkEnableOption "container applications on host Wayland/WSLg with fail-closed Mihomo US egress";
+    commandName = lib.mkOption {
+      type = lib.types.strMatching "[a-z][a-z0-9-]*";
+      default = "gcnt";
+      description = "Host command and desktop launcher namespace. Use a distinct name for each independently evaluated instance.";
+    };
+    containerName = lib.mkOption {
+      type = lib.types.strMatching "[a-z][a-z0-9-]*";
+      default = "hm-gui";
+      description = "Podman container and localhost image name; the gateway uses NAME-gateway. Instances must not share it.";
+    };
+    package = lib.mkOption {
+      type = lib.types.package;
+      readOnly = true;
+      default = gcnt;
+      description = "Host command, for explicit composition of independently evaluated instances.";
+    };
+    proxy = {
+      port = lib.mkOption {
+        type = lib.types.nullOr lib.types.port;
+        default = null;
+        description = "Existing loopback Mihomo mixed listener with UDP for all container traffic. Null selects services.mihomo.us.";
+      };
+      label = lib.mkOption {
+        type = lib.types.strMatching "[A-Za-z0-9_-]+";
+        default = "US";
+        description = "Diagnostic egress label in help, check output and desktop launchers. Does not select routing.";
+      };
+    };
     timeZone = lib.mkOption {
       type = lib.types.strMatching "[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*";
       default = "UTC";
@@ -254,7 +295,9 @@ in
         message = "gui-container browserProfiles.firefoxSettings is only supported for Firefox.";
       }
       {
-        assertion = config.services.mihomo.us.enable && config.services.mihomo.us.listen == "127.0.0.1";
+        assertion =
+          cfg.proxy.port != null
+          || (config.services.mihomo.us.enable && config.services.mihomo.us.listen == "127.0.0.1");
         message = "gui-container requires the Mihomo US listener on 127.0.0.1.";
       }
       {
@@ -282,7 +325,8 @@ in
     ];
     xdg.desktopEntries = import ./gui-container/host-desktop.nix {
       inherit gcnt lib pkgs;
-      inherit (cfg) browserProfiles;
+      inherit (cfg) browserProfiles commandName;
+      egressLabel = cfg.proxy.label;
     };
   };
 }

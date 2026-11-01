@@ -370,6 +370,37 @@ sys.exit(status)
         self.assertEqual(self.data()["calls"][-1], ["stats", "--no-stream", "hm-gui", "hm-gui-gateway"])
         self.assertFalse(any(c[0] in ("create", "start", "load") for c in self.data()["calls"]))
 
+    def test_named_instance_uses_own_names_and_keeps_default_instance(self):
+        env = dict(self.env, GUI_COMMAND="gcnt-lt", GUI_CONTAINER="gcnt-lt", GUI_EGRESS_LABEL="LT1",
+                   GUI_IMAGE_REF="localhost/gcnt-lt:new", GUI_GATEWAY_REF="localhost/gcnt-lt-gateway:new")
+        default = {
+            "hm-gui": {"image": "localhost/hm-gui:old", "running": False, "spec": ""},
+            "hm-gui-gateway": {"image": "localhost/hm-gui-gateway:old", "running": False, "spec": ""},
+        }
+        self.state.write_text(json.dumps({
+            "calls": [],
+            "images": ["localhost/hm-gui:old", "localhost/hm-gui-gateway:old", "localhost/gcnt-lt:old"],
+            "containers": dict(default, **{
+                "gcnt-lt": {"image": "localhost/gcnt-lt:old", "running": False, "spec": ""},
+            }),
+        }))
+        text = self.ok(self.launch("help", env=env)).stdout
+        self.assertIn("Usage: gcnt-lt {up|", text)
+        self.assertIn("Check host prerequisites or LT1 egress.", text)
+        self.assertIn("  gcnt-lt exec foot", text)
+        self.assertNotRegex(text, r"\bgcnt\b(?!-)|\bUS\b")
+        self.assertIn("Run gcnt-lt up first.", self.launch("check", env=env).stderr)
+        self.ok(self.launch("status", env=env))
+        self.assertIn(["ps", "-a", "--filter", "name=^gcnt-lt($|-gateway$)"], self.data()["calls"])
+        self.assertIn("Run: gcnt-lt shell", self.ok(self.launch("rebuild", env=env)).stdout)
+        data = self.data()
+        self.assertEqual(data["containers"], default)
+        self.assertEqual(set(data["images"]), {
+            "localhost/hm-gui:old", "localhost/hm-gui-gateway:old",
+            "localhost/gcnt-lt:new", "localhost/gcnt-lt-gateway:new",
+        })
+        self.assertFalse(any("hm-gui" in arg for call in data["calls"] for arg in call))
+
     def require_devices(self):
         if os.geteuid() == 0 or not os.access("/dev/net/tun", os.R_OK | os.W_OK):
             self.skipTest("up validates non-root and host TUN access")
