@@ -7,9 +7,11 @@
 }:
 let
   cfg = config.programs.gui-container;
+  commandName = cfg.commandName or "gcnt";
   gcnt = lib.findFirst (
-    p: (p.name or "") == "gcnt"
+    p: (p.name or "") == commandName
   ) (throw "windows-shortcuts requires gui-container") config.home.packages;
+  # Default command name keeps the existing Windows shortcut IDs and labels.
   entries = import ./host-desktop.nix {
     inherit gcnt lib pkgs;
     inherit (cfg) browserProfiles;
@@ -33,7 +35,7 @@ let
       case "$1" in
       ${lib.concatStringsSep "\n" (
         lib.mapAttrsToList (id: args: ''
-          ${id}) exec ${gcnt}/bin/gcnt ${lib.escapeShellArgs args} ;;
+          ${id}) exec ${gcnt}/bin/${commandName} ${lib.escapeShellArgs args} ;;
         '') commands
       )}
         *) echo "Unknown GCNT application: $1" >&2; exit 2 ;;
