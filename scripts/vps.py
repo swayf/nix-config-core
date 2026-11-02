@@ -124,14 +124,17 @@ def ssh_probe_error(code, stderr):
     return prefix + reason + "; tool output withheld to protect secrets; no retry"
 
 
-def run(argv, data=None, timeout=60, pass_fds=(), env=None):
+def run(argv, data=None, timeout=60, pass_fds=(), env=None, capture_stdout=True, capture_stderr=True):
     options = {"env": env} if env is not None else {}
     tool = Path(argv[0]).name
     details = {"tool": tool, "timeout_seconds": timeout}
     started = time.monotonic()
+    stdout_target = subprocess.PIPE if capture_stdout else None
+    stderr_target = subprocess.PIPE if capture_stderr else None
     try:
-        result = subprocess.run([str(a) for a in argv], input=data, capture_output=True, timeout=timeout,
-                                pass_fds=pass_fds, **options)
+        result = subprocess.run([str(a) for a in argv], input=data,
+                                stdout=stdout_target, stderr=stderr_target,
+                                timeout=timeout, pass_fds=pass_fds, **options)
     except FileNotFoundError:
         details["elapsed_seconds"] = round(time.monotonic() - started, 3)
         raise Error("Required tool not found: " + tool + "; check the vps-vless runtime/PATH; no retry", details=details) from None
@@ -147,13 +150,16 @@ def run(argv, data=None, timeout=60, pass_fds=(), env=None):
     if result.returncode:
         # Keep stderr for the private JSON report, never for terminal diagnostics.
         # It can contain credentials or invalid secret fields; stdout stays omitted.
-        details["stderr"] = result.stderr
+        details["stderr"] = result.stderr if capture_stderr else b"(streamed to terminal)"
         if tool == "sshpass":
             error = SSHAuthenticationError if result.returncode in (5, 6, 7, 255) else Error
             raise error(ssh_probe_error(result.returncode, result.stderr), details=details)
-        raise Error(f"Command failed: {tool} (exit {result.returncode}); "
-                    "output withheld to protect secrets; check tools/configuration; no retry", details=details)
-    return result.stdout
+        reason = f"Command failed: {tool} (exit {result.returncode}); " + (
+            "output withheld to protect secrets; check tools/configuration; no retry"
+            if capture_stderr else "check above output; no retry"
+        )
+        raise Error(reason, details=details)
+    return result.stdout if capture_stdout else b""
 
 
 def confirm_overwrite(path, force=False):
@@ -1137,7 +1143,8 @@ def check(args, repo, state, host):
     before = source_digest(repo, args.name)
     with ref(repo, args.name) as configuration:
         built = run(["nix", "build", configuration + ".system.build.toplevel",
-                     configuration + ".system.build.diskoScript", "--no-link", "--print-out-paths"], timeout=3600).decode().splitlines()
+                     configuration + ".system.build.diskoScript", "--no-link", "--print-out-paths"],
+                    timeout=3600, capture_stdout=True, capture_stderr=False).decode().splitlines()
     system = evaluate(repo, args.name, "system.build.toplevel.outPath", raw=True)
     disko = evaluate(repo, args.name, "system.build.diskoScript.outPath", raw=True)
     if len(built) != 2 or set(built) != {system, disko} or any(not p.startswith("/nix/store/") for p in built):

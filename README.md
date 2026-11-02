@@ -106,6 +106,8 @@ runs `deploy-rs` from that flake's lock with `--skip-checks`, the CLI's pinned
 address/user/SSH options and forced magic/auto rollback; the node owns its
 timeouts and the SSH user must be a Nix trusted user. Without a node it keeps
 `nix copy` plus `switch-to-configuration` with no automatic rollback.
+`build` (and alias `warmup`) builds and validates locally with live progress,
+leaving the VPS untouched.
 
 Optional `clientProviders` pins a caller-owned JSON path with entries shaped as
 `NAME: { host, client, nodeName, stateFile }`. `stateFile` must be relative below

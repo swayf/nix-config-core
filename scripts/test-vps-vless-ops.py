@@ -424,7 +424,26 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(self.run.call_args.args[0][1], "build")
         self.assertEqual(self.run.call_args.args[0][2],
                          "path:/source-only#nixosConfigurations.fixture.config.system.build.toplevel")
+        self.assertEqual(self.run.call_args.kwargs.get("capture_stdout"), True)
+        self.assertEqual(self.run.call_args.kwargs.get("capture_stderr"), False)
         self.remote.assert_not_called()
+
+    def test_warmup_and_build_show_progress_and_validate_without_ssh(self):
+        for command in ("build", "warmup"):
+            with self.subTest(command=command), \
+                    mock.patch.object(O, "fingerprint", return_value="same"), \
+                    mock.patch.object(O, "validate_runtime") as validate:
+                self.run.reset_mock()
+                self.run.return_value = SYSTEM.encode()
+                self.invoke(command, "fixture")
+                validate.assert_called_once()
+                self.assertEqual(self.run.call_count, 1)
+                self.assertEqual(self.run.call_args.args[0][1], "build")
+                self.assertEqual(self.run.call_args.args[0][2],
+                                 "path:/source-only#nixosConfigurations.fixture.config.system.build.toplevel")
+                self.assertEqual(self.run.call_args.kwargs.get("capture_stdout"), True)
+                self.assertEqual(self.run.call_args.kwargs.get("capture_stderr"), False)
+                self.remote.assert_not_called()
 
     def test_apply_build_failure_and_stale_sources_prevent_ssh(self):
         for failure in ("build", "stale"):

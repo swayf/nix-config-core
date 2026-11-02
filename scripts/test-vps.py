@@ -93,7 +93,7 @@ class HelpTests(unittest.TestCase):
         parser = V.parser()
         commands = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction)).choices
         self.assertEqual(set(commands), {"probe", "plan", "secrets", "check", "install", "verify",
-                                         "list", "client", "telegram", "ssh", "tunnel", "status", "logs", "restart", "apply"})
+                                         "list", "client", "telegram", "ssh", "tunnel", "status", "logs", "restart", "apply", "build", "warmup"})
         for command, current in [(None, parser), *commands.items()]:
             text = self.help_text(parser, [command] if command else [])
             for action in current._actions:

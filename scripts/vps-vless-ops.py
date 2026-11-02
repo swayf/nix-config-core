@@ -20,7 +20,7 @@ import tempfile
 import urllib.parse
 import warnings
 
-COMMANDS = {"list", "client", "telegram", "ssh", "tunnel", "status", "logs", "restart", "apply"}
+COMMANDS = {"list", "client", "telegram", "ssh", "tunnel", "status", "logs", "restart", "apply", "build", "warmup"}
 SERVICES = ("xray", "prometheus", "grafana", "alertmanager", "xray-exporter",
             "prometheus-node-exporter", "prometheus-blackbox-exporter")
 UIS = {"grafana": 3000, "prometheus": 9090, "alertmanager": 9093}
@@ -45,6 +45,8 @@ def add_parsers(sub, formatter):
             "logs": "read a service journal over SSH (may contain secrets)",
             "restart": "explicitly restart one allowlisted service after confirmation",
             "apply": "build/validate locally, then explicitly switch NixOS without formatting",
+            "build": "build and validate locally; show progress; VPS unchanged",
+            "warmup": "alias for build; build and validate locally; VPS unchanged",
         }[name])
         q.add_argument("name", nargs="?" if name == "list" else None, metavar="HOST")
         if name == "client":
@@ -516,7 +518,7 @@ def copy_and_switch(v, c, built):
         env = os.environ | {"NIX_SSHOPTS": "", "PATH": str(directory) + os.pathsep + os.environ.get("PATH", "")}
         v.run(["nix", "copy", "--no-check-sigs", "--to",
                "ssh-ng://" + c["user"] + "@" + c["address"] + "?remote-program=sudo%20-n%20/run/current-system/sw/bin/nix-daemon",
-               built], env=env, timeout=1800)
+               built], env=env, timeout=1800, capture_stderr=False)
 
 
 def deploy_rs(v, c, flake, name):
@@ -531,7 +533,24 @@ def deploy_rs(v, c, flake, name):
     v.run(["nix", "run", "--inputs-from", flake, "deploy-rs#deploy-rs", "--",
            flake + "#" + name, "--skip-checks", "--magic-rollback", "true", "--auto-rollback", "true",
            "--hostname", c["address"], "--ssh-user", c["user"], "--ssh-opts", " ".join(options)],
-          timeout=3600)
+          timeout=3600, capture_stdout=False, capture_stderr=False)
+
+
+def warmup(v, args, host):
+    before = fingerprint(v, host)
+    print("Building and validating locally; VPS unchanged.", flush=True)
+    with v.ref(host.repo, host.name) as configuration:
+        built = v.run(["nix", "build", configuration + ".system.build.toplevel",
+                       "--no-link", "--print-out-paths"],
+                      timeout=3600, capture_stdout=True, capture_stderr=False).decode().strip()
+        if not re.fullmatch(r"/nix/store/[a-z0-9]{32}-[^/\s]+", built):
+            raise v.Error("Unexpected system build output")
+        print("Built: " + built, flush=True)
+        validate_runtime(v, host)
+        if fingerprint(v, host) != before:
+            raise v.Error("Configuration changed during build; repeat warmup after review")
+    print("Local build and secret-backed Xray validation passed; ready for apply.")
+    return 0
 
 
 def apply(v, args, host):
@@ -540,9 +559,11 @@ def apply(v, args, host):
     # The source snapshot stays open until deploy-rs has evaluated the same flake.
     with v.ref(host.repo, host.name) as configuration:
         built = v.run(["nix", "build", configuration + ".system.build.toplevel",
-                       "--no-link", "--print-out-paths"], timeout=3600).decode().strip()
+                       "--no-link", "--print-out-paths"],
+                      timeout=3600, capture_stdout=True, capture_stderr=False).decode().strip()
         if not re.fullmatch(r"/nix/store/[a-z0-9]{32}-[^/\s]+", built):
             raise v.Error("Unexpected system build output")
+        print("Built: " + built, flush=True)
         validate_runtime(v, host)
         prepared = prepare_client_providers(v, host)
         if fingerprint(v, host) != before:
@@ -600,6 +621,8 @@ def dispatch(v, args, repo, state_root):
             return client(v, args, host)
         if args.command == "telegram":
             return telegram(v, args, host)
+        if args.command in {"build", "warmup"}:
+            return warmup(v, args, host)
         if args.command == "apply":
             return apply(v, args, host)
         return remote_operation(v, args, host)
