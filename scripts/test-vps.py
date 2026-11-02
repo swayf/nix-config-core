@@ -110,6 +110,27 @@ class HelpTests(unittest.TestCase):
                     else:
                         self.assertNotIn("(default: None)", block)
 
+    def test_public_argv_puts_host_before_command(self):
+        p = V.parser()
+        for argv, expected in (
+                (["lt1-vps", "client", "add", "bob"], ["client", "lt1-vps", "add", "bob"]),
+                (["--repo", "/r", "--debug", "fixture", "probe", "203.0.113.5"],
+                 ["--repo", "/r", "--debug", "probe", "fixture", "203.0.113.5"]),
+                (["status", "apply", "--check"], ["apply", "status", "--check"]),
+                (["list"], ["list"]), (["fixture", "list"], ["list", "fixture"]), (["--help"], ["--help"])):
+            with self.subTest(argv=argv):
+                self.assertEqual(V.public_argv(p, list(argv)), expected)
+        for argv in (["apply", "fixture"], ["fixture"], ["fixture", "bogus"]):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()), \
+                    self.assertRaises(SystemExit) as exit:
+                V.public_argv(p, list(argv))
+            self.assertEqual(exit.exception.code, 2)
+
+    def test_help_usage_shows_host_before_command(self):
+        self.assertIn("HOST COMMAND", self.help_text(V.parser(), []))
+        self.assertIn("usage: vps-vless HOST client", self.help_text(V.parser(), ["client"]))
+        self.assertIn("usage: vps-vless [HOST] list", self.help_text(V.parser(), ["list"]))
+
     def test_every_command_accepts_force_for_overwrite_confirmation(self):
         for argv in (["probe", "fixture", "203.0.113.5"], ["plan", "fixture", "/admin.pub"],
                      ["secrets", "fixture"], ["check", "fixture"], ["install", "fixture"], ["verify", "fixture"]):
@@ -449,7 +470,7 @@ class DiagnosticsTests(unittest.TestCase):
                 state = root / "state"
                 state.mkdir()
                 stderr = io.StringIO()
-                argv = ["vps", *(["--debug"] if debug else []), "check", "vps-test"]
+                argv = ["vps", *(["--debug"] if debug else []), "vps-test", "check"]
                 failure = RuntimeError("SECRET-INPUT") if debug else ValueError("SECRET-INPUT")
                 with patch("sys.argv", argv), patch.object(V, "host_paths", return_value=(root, state, root / "host")), \
                      patch.object(V, "check", side_effect=failure) as action, \
@@ -476,7 +497,7 @@ class DiagnosticsTests(unittest.TestCase):
                     state = root / "state"
                     state.mkdir()
                     terminal = io.StringIO()
-                    argv = ["vps", *(["--debug"] if debug else []), "check", "vps-test"]
+                    argv = ["vps", *(["--debug"] if debug else []), "vps-test", "check"]
                     options = {"side_effect": subprocess.TimeoutExpired(
                         ["nix", "SECRET-ARG"], 60, output=b"SECRET-OUT", stderr=raw_stderr)} if timed_out else {
                         "return_value": subprocess.CompletedProcess([], 42, stdout=b"SECRET-OUT", stderr=raw_stderr)}

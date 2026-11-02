@@ -162,9 +162,9 @@ class SourceBoundaryTests(unittest.TestCase):
                     patch.object(V, "copy_source_file") as copier, patch.object(V, "run") as runner:
                 with self.assertRaisesRegex(V.Error, "In-checkout --state-dir"):
                     V.state_path(self.repo, "fixture", override, create=True)
-                for command in (("check", "fixture", "--vm-test"), ("apply", "fixture", "--check"),
-                                ("install", "fixture"), ("verify", "fixture")):
-                    with self.subTest(command=command[0]), \
+                for command in (("fixture", "check", "--vm-test"), ("fixture", "apply", "--check"),
+                                ("fixture", "install"), ("fixture", "verify")):
+                    with self.subTest(command=command[1]), \
                             patch.object(V.sys, "argv", ["vps-vless", "--repo", str(self.repo),
                                                         "--state-dir", str(override), *command]), \
                             patch.object(V.os, "umask"), patch.object(V.signal, "signal"), \

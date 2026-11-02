@@ -1441,7 +1441,7 @@ def wait_for_installer(c, timeout=300):
             if result.returncode != 255:
                 raise Error("Authenticated installer SSH readiness command failed; inspect recovery")
         time.sleep(min(2, max(0, deadline - time.monotonic())))
-    raise Error("Installer SSH did not become ready with the saved source host key; inspect recovery and rerun vps-vless install HOST. "
+    raise Error("Installer SSH did not become ready with the saved source host key; inspect recovery and rerun vps-vless HOST install. "
                 "The standard kexec installer must preserve the source SSH host key; an unknown key is never accepted automatically")
 
 
@@ -1819,8 +1819,34 @@ class DefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
         return super()._get_help_string(action)
 
 
+PUBLIC_USAGE = ("vps-vless [-h] [--repo REPO] [--state-dir STATE_DIR] [--debug] HOST COMMAND [ARGS ...]\n"
+                "       vps-vless [-h] [--repo REPO] [--state-dir STATE_DIR] [--debug] list")
+GLOBAL_VALUE_OPTIONS = {"--repo", "--state-dir"}
+
+
+def public_argv(p, argv):
+    # Public order is HOST COMMAND ARGS; the parser keeps COMMAND HOST ARGS internally.
+    commands = next(a for a in p._actions if isinstance(a, argparse._SubParsersAction)).choices
+    i = 0
+    while i < len(argv) and argv[i].startswith("-"):
+        if argv[i] == "--":
+            del argv[i]
+            break
+        i += 2 if argv[i] in GLOBAL_VALUE_OPTIONS else 1
+    if i >= len(argv):
+        return argv
+    if i + 1 < len(argv) and argv[i + 1] in commands:
+        return argv[:i] + [argv[i + 1], argv[i]] + argv[i + 2:]
+    if argv[i] == "list":
+        return argv
+    if argv[i] in commands:
+        p.error(f"HOST goes before COMMAND: vps-vless HOST {argv[i]} ...")
+    p.error("expected HOST COMMAND; commands: " + ", ".join(sorted(commands)))
+
+
 def parser():
-    p = argparse.ArgumentParser(prog="vps-vless", description=__doc__, formatter_class=DefaultsHelpFormatter)
+    p = argparse.ArgumentParser(prog="vps-vless", usage=PUBLIC_USAGE, description=__doc__,
+                                formatter_class=DefaultsHelpFormatter)
     p.add_argument("--repo", type=Path, default=Path(os.environ.get("HM_FLAKE", os.getcwd())),
                    help="flake checkout; HM_FLAKE if set, otherwise current directory")
     p.add_argument("--state-dir", type=Path, default=None,
@@ -1870,6 +1896,9 @@ def parser():
         if name != "install":
             command.add_argument("--force", action="store_true",
                                  help="display and automatically accept overwriting existing generated files")
+        # HOST is shown before the command, as the public argv order requires.
+        command.prog = ("vps-vless [HOST] " if name == "list" else "vps-vless HOST ") + name
+        next(a for a in command._actions if a.dest == "name").help = argparse.SUPPRESS
     return p
 
 
@@ -1973,7 +2002,8 @@ def report_failure(error, args, state):
 
 
 def main():
-    args = parser().parse_args()
+    p = parser()
+    args = p.parse_args(public_argv(p, sys.argv[1:]))
     os.umask(0o077)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     state = None

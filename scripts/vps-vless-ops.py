@@ -259,7 +259,7 @@ def client(v, args, host):
         if config_changed:
             changes.append((host.config, json_bytes(host.public)))
         publish(v, changes, args.force)
-    print("Local client configuration updated. VPS unchanged; run vps-vless apply " + host.name)
+    print("Local client configuration updated. VPS unchanged; run vps-vless " + host.name + " apply")
 
 
 def telegram(v, args, host):
@@ -287,7 +287,7 @@ def telegram(v, args, host):
         settings["chatId"] = chat
         publish(v, [(host.monitoring, host.encrypt(payload)),
                     (host.settings_file, json_bytes(settings))], args.force)
-    print("Local Telegram binding updated. VPS unchanged; run vps-vless apply " + host.name)
+    print("Local Telegram binding updated. VPS unchanged; run vps-vless " + host.name + " apply")
 
 
 @contextlib.contextmanager
