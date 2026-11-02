@@ -443,7 +443,8 @@ class OperationsTests(unittest.TestCase):
                 mock.patch.object(O.os, "isatty", return_value=True), mock.patch("builtins.input", return_value="no"):
             with self.assertRaises(V.Error):
                 self.invoke("apply", "fixture")
-        self.assertEqual(self.run.call_count, 1)
+        # Build plus the local deploy-node probe; nothing reaches SSH.
+        self.assertEqual([c.args[0][1] for c in self.run.call_args_list], ["build", "eval"])
 
     def test_apply_copy_is_pinned_and_switch_is_explicit_without_disko(self):
         commands = []
@@ -483,6 +484,69 @@ class OperationsTests(unittest.TestCase):
                 with self.assertRaises(V.Error):
                     self.invoke("apply", "fixture", "--force")
             self.assertFalse(any("switch-to-configuration" in str(c) for c in calls))
+
+    def deploy_rs_run(self, commands, failure=None):
+        def run(command, **kwargs):
+            commands.append(command)
+            if command[1] == "build":
+                return SYSTEM.encode()
+            if command[1] == "eval" and "getFlake" in command[-1]:
+                self.assertIn('"path:/source-only"', command[-1])
+                self.assertIn('? "fixture"', command[-1])
+                return b"true\n"
+            if failure == "deploy" and "deploy-rs#deploy-rs" in command:
+                raise V.Error("fixture deploy failure")
+            return b""
+        return run
+
+    def test_apply_with_deploy_node_uses_deploy_rs_with_pinned_ssh(self):
+        commands = []
+        with mock.patch.object(O, "fingerprint", return_value="same"), mock.patch.object(O, "validate_runtime"), \
+                mock.patch.object(V, "run", side_effect=self.deploy_rs_run(commands)):
+            self.invoke("apply", "fixture", "--force")
+        deploy, = [c for c in commands if "deploy-rs#deploy-rs" in c]
+        self.assertEqual(deploy[:5], ["nix", "run", "--inputs-from", "path:/source-only", "deploy-rs#deploy-rs"])
+        tail = deploy[6:]
+        self.assertEqual(tail[0], "path:/source-only#fixture")
+        for flag, value in (("--magic-rollback", "true"), ("--auto-rollback", "true"),
+                            ("--hostname", "203.0.113.8"), ("--ssh-user", "ops")):
+            self.assertEqual(tail[tail.index(flag) + 1], value)
+        self.assertIn("--skip-checks", tail)
+        options = tail[tail.index("--ssh-opts") + 1]
+        self.assertIn("-p 3333", options)
+        self.assertIn("StrictHostKeyChecking=yes", options)
+        self.assertIn("UserKnownHostsFile=", options)
+        self.assertIn("IdentitiesOnly=yes", options)
+        joined = "\n".join(" ".join(str(a) for a in c) for c in commands)
+        self.assertNotIn("switch-to-configuration", joined)
+        self.assertNotIn("nix copy", joined)
+        self.assertIn("systemctl is-active", " ".join(commands[-1]))
+
+    def test_deploy_rs_failure_or_source_change_never_publishes(self):
+        path = self.enable_client_provider_fixture()
+        for failure in ("deploy", "stale"):
+            commands = []
+            digest = ["same", "same", "changed"] if failure == "stale" else None
+            with self.subTest(failure=failure), \
+                    mock.patch.object(O, "fingerprint", side_effect=digest, return_value="same"), \
+                    mock.patch.object(O, "validate_runtime"), \
+                    mock.patch.object(V, "run", side_effect=self.deploy_rs_run(commands, failure)):
+                with self.assertRaises(V.Error):
+                    self.invoke("apply", "fixture", "--force")
+            deployed = any("deploy-rs#deploy-rs" in c for c in commands)
+            self.assertEqual(deployed, failure == "deploy")
+            self.assertFalse(any("systemctl is-active" in " ".join(c) for c in commands))
+            self.assertFalse(path.exists())
+
+    def test_deploy_rs_refuses_whitespace_in_ssh_options(self):
+        spaced = Path(self.tmp.name) / "admin key"
+        spaced.write_text("TEST KEY, NOT USED")
+        commands = []
+        with mock.patch.object(O, "fingerprint", return_value="same"), mock.patch.object(O, "validate_runtime"), \
+                mock.patch.object(V, "run", side_effect=self.deploy_rs_run(commands)):
+            with self.assertRaisesRegex(V.Error, "whitespace"):
+                self.invoke("apply", "fixture", "--force", "--key", str(spaced))
+        self.assertFalse(any("deploy-rs#deploy-rs" in c for c in commands))
 
     def enable_client_provider_fixture(self):
         binding = {"agents-lt": {"host": "fixture", "client": "default", "nodeName": "lt1-vps",

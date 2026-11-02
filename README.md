@@ -101,6 +101,12 @@ Renderer and Python helpers come from the tool, never executable Python from
 sources participate in the receipt digest; unrelated reports/hosts do not.
 A changed source digest invalidates old checks, not installation-attempt markers.
 
+`apply` uses deploy-rs when the `--repo` flake declares `deploy.nodes.HOST`: it
+runs `deploy-rs` from that flake's lock with `--skip-checks`, the CLI's pinned
+address/user/SSH options and forced magic/auto rollback; the node owns its
+timeouts and the SSH user must be a Nix trusted user. Without a node it keeps
+`nix copy` plus `switch-to-configuration` with no automatic rollback.
+
 Optional `clientProviders` pins a caller-owned JSON path with entries shaped as
 `NAME: { host, client, nodeName, stateFile }`. `stateFile` must be relative below
 `mihomo/vps/` in the invoking user's XDG state directory, outside the checkout

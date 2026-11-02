@@ -495,24 +495,16 @@ def import_client_provider(v, args, host):
     return 0
 
 
-def apply(v, args, host):
-    before = fingerprint(v, host)
-    print("Building and validating locally; VPS unchanged.", flush=True)
-    with v.ref(host.repo, host.name) as configuration:
-        built = v.run(["nix", "build", configuration + ".system.build.toplevel",
-                       "--no-link", "--print-out-paths"], timeout=3600).decode().strip()
-    if not re.fullmatch(r"/nix/store/[a-z0-9]{32}-[^/\s]+", built):
-        raise v.Error("Unexpected system build output")
-    validate_runtime(v, host)
-    prepared = prepare_client_providers(v, host)
-    if fingerprint(v, host) != before:
-        raise v.Error("Configuration changed during build; repeat apply after review")
-    print("Local build and secret-backed Xray validation passed; live VLESS/WARP/Telegram remain unverified.")
-    if args.check:
-        return 0
-    print("Switch may interrupt proxy/SSH. No disk formatting, backup or automatic rollback.")
-    confirm(v, "APPLY " + host.name, args.force)
-    with administrative_connection(v, args, host) as c, tempfile.TemporaryDirectory(prefix="vps-vless-copy-") as directory:
+def deploy_node(v, flake, name):
+    """True when the host flake declares deploy.nodes.NAME; apply then uses deploy-rs."""
+    expression = ("let f = builtins.getFlake " + json.dumps(flake) + "; in "
+                  "f ? deploy && f.deploy ? nodes && f.deploy.nodes ? " + json.dumps(name))
+    return v.run(["nix", "eval", "--impure", "--json", "--expr", expression], timeout=300).strip() == b"true"
+
+
+def copy_and_switch(v, c, built):
+    """Legacy path without a deploy-rs node: no automatic rollback."""
+    with tempfile.TemporaryDirectory(prefix="vps-vless-copy-") as directory:
         # Pin nix copy to the same SSH options; use an absolute binary so the
         # PATH wrapper cannot recursively invoke itself.
         ssh_binary = shutil.which("ssh")
@@ -521,23 +513,72 @@ def apply(v, args, host):
         wrapper = Path(directory) / "ssh"
         wrapper.write_text("#!/bin/sh\nexec " + shlex.join([str(Path(ssh_binary).resolve()), *v.ssh_args(c)[1:-1]]) + ' "$@"\n')
         wrapper.chmod(0o700)
-        preflight = ('. /etc/os-release && test "$ID" = nixos && test "$(hostname)" = '
-                     + shlex.quote(host.name) + " && sudo -n true")
-        v.run(v.ssh_args(c) + [preflight], timeout=20)
         env = os.environ | {"NIX_SSHOPTS": "", "PATH": str(directory) + os.pathsep + os.environ.get("PATH", "")}
         v.run(["nix", "copy", "--no-check-sigs", "--to",
                "ssh-ng://" + c["user"] + "@" + c["address"] + "?remote-program=sudo%20-n%20/run/current-system/sw/bin/nix-daemon",
                built], env=env, timeout=1800)
-        if fingerprint(v, host) != before or any(address != host.address() for _, _, address in prepared):
-            raise v.Error("Configuration/address changed before switch; closure copied but not activated")
-        command = ("sudo -n /run/current-system/sw/bin/nix-env -p /nix/var/nix/profiles/system --set "
-                   + shlex.quote(built) + " && sudo -n " + shlex.quote(built + "/bin/switch-to-configuration") + " switch")
-        v.run(v.ssh_args(c) + [command], timeout=300)
-        v.run(v.ssh_args(c) + ["systemctl is-active xray prometheus grafana alertmanager"], timeout=30)
+
+
+def deploy_rs(v, c, flake, name):
+    """deploy-rs from the host flake's own lock with the pinned administrative SSH options.
+
+    Magic and auto rollback are forced on: a failed activation or a lost SSH
+    connection after it returns the previous generation. The node owns timeouts.
+    """
+    options = v.ssh_args(c)[1:-1]
+    if any(not option or any(ch.isspace() for ch in option) for option in options):
+        raise v.Error("deploy-rs splits --ssh-opts on whitespace; SSH key/known_hosts paths must not contain it")
+    v.run(["nix", "run", "--inputs-from", flake, "deploy-rs#deploy-rs", "--",
+           flake + "#" + name, "--skip-checks", "--magic-rollback", "true", "--auto-rollback", "true",
+           "--hostname", c["address"], "--ssh-user", c["user"], "--ssh-opts", " ".join(options)],
+          timeout=3600)
+
+
+def apply(v, args, host):
+    before = fingerprint(v, host)
+    print("Building and validating locally; VPS unchanged.", flush=True)
+    # The source snapshot stays open until deploy-rs has evaluated the same flake.
+    with v.ref(host.repo, host.name) as configuration:
+        built = v.run(["nix", "build", configuration + ".system.build.toplevel",
+                       "--no-link", "--print-out-paths"], timeout=3600).decode().strip()
+        if not re.fullmatch(r"/nix/store/[a-z0-9]{32}-[^/\s]+", built):
+            raise v.Error("Unexpected system build output")
+        validate_runtime(v, host)
+        prepared = prepare_client_providers(v, host)
+        if fingerprint(v, host) != before:
+            raise v.Error("Configuration changed during build; repeat apply after review")
+        print("Local build and secret-backed Xray validation passed; live VLESS/WARP/Telegram remain unverified.")
+        if args.check:
+            return 0
+        flake = configuration.split("#", 1)[0]
+        managed = deploy_node(v, flake, host.name)
+        if managed:
+            print("Switch may interrupt proxy/SSH. deploy-rs rolls back a failed activation or lost SSH; "
+                  "no disk formatting or backup.")
+        else:
+            print("Switch may interrupt proxy/SSH. No disk formatting, backup or automatic rollback.")
+        confirm(v, "APPLY " + host.name, args.force)
+        with administrative_connection(v, args, host) as c:
+            preflight = ('. /etc/os-release && test "$ID" = nixos && test "$(hostname)" = '
+                         + shlex.quote(host.name) + " && sudo -n true")
+            v.run(v.ssh_args(c) + [preflight], timeout=20)
+            if managed:
+                if fingerprint(v, host) != before or any(address != host.address() for _, _, address in prepared):
+                    raise v.Error("Configuration/address changed before deploy; VPS unchanged")
+                deploy_rs(v, c, flake, host.name)
+            else:
+                copy_and_switch(v, c, built)
+                if fingerprint(v, host) != before or any(address != host.address() for _, _, address in prepared):
+                    raise v.Error("Configuration/address changed before switch; closure copied but not activated")
+                command = ("sudo -n /run/current-system/sw/bin/nix-env -p /nix/var/nix/profiles/system --set "
+                           + shlex.quote(built) + " && sudo -n " + shlex.quote(built + "/bin/switch-to-configuration") + " switch")
+                v.run(v.ssh_args(c) + [command], timeout=300)
+            v.run(v.ssh_args(c) + ["systemctl is-active xray prometheus grafana alertmanager"], timeout=30)
     if prepared and fingerprint(v, host) != before:
         raise v.Error("VPS switched but configuration changed; managed providers NOT published")
     publish_client_providers(v, host, prepared)
-    print("Generation switched. Verify clients, WARP and Telegram separately; no automatic rollback.")
+    print("Generation switched. Verify clients, WARP and Telegram separately"
+          + ("; deploy-rs confirmed the SSH connection." if managed else "; no automatic rollback."))
     return 0
 
 
