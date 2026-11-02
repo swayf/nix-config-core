@@ -28,6 +28,10 @@ let
   rejected = extra: !(passed (evaluate ([ profile runtime ] ++ extra)));
   disabled = evaluate [ ];
   noWarp = evaluate [ profile runtime { services.xray.declarative.warp.enable = false; } ];
+  withAddresses = evaluate [ profile runtime {
+    systemd.network.networks."10-fixture".address = [ "203.0.113.7/32" "10.1.2.3/8" ];
+    systemd.network.networks."20-fixture".address = [ "203.0.113.7/24" ];
+  } ];
   overridden = evaluate [ profile runtime {
     services.vps = {
       adminUser = "alice"; sshPort = 2222; warpDomains = [ "example.test" ];
@@ -101,7 +105,7 @@ let
       && overridden.services.xray.declarative.settings.port == 2444
       && overridden.services.xray.declarative.settings.tag == "caller-inbound"
       && !overridden.services.xray.declarative.settings.sniffing.enabled
-      && (builtins.elemAt overridden.services.xray.declarative.settings.routing.rules 2).domain == [ "domain:example.test" ]
+      && (lib.findFirst (r: (r.outboundTag or "") == "warp") { } overridden.services.xray.declarative.settings.routing.rules).domain or null == [ "domain:example.test" ]
       && overridden.time.timeZone == "Europe/Berlin"
       && overridden.nix.settings.max-jobs == 3 && overridden.nix.settings.cores == 4
       && lib.unique overridden.nix.settings.trusted-users == [ "root" "alice" ]
@@ -120,8 +124,17 @@ let
       && attempted.services.openssh.settings.PermitRootLogin == "no"
       && attempted.services.openssh.settings.AllowUsers == [ "admin" ];
     warpOptional = passed noWarp && !(lib.any (o: o.tag == "warp") noWarp.services.xray.declarative.settings.outbounds)
-      && builtins.length noWarp.services.xray.declarative.settings.routing.rules == 2
+      && builtins.length noWarp.services.xray.declarative.settings.routing.rules == 3
       && noWarp.systemd.services.xray-config.serviceConfig.LoadCredential == [ "material:/run/fixture/material" ];
+    # Blocks come before WARP; the fixture network has no address, so no own-IP rule.
+    egressBlocks = let
+      rules = withAddresses.services.xray.declarative.settings.routing.rules;
+      blocked = builtins.filter (r: r.outboundTag == "blocked") rules;
+    in passed withAddresses
+      && map (r: r.ip or r.protocol or r.port) blocked
+        == [ [ "geoip:private" ] [ "bittorrent" ] "25" [ "203.0.113.7" "10.1.2.3" ] ]
+      && (lib.last rules).outboundTag == "warp"
+      && !(lib.any (r: r ? ip && r.ip != [ "geoip:private" ]) c.services.xray.declarative.settings.routing.rules);
     runtimeOnly = !(c ? sops) && c.systemd.services.xray-config.serviceConfig.LoadCredential == [ "material:/run/fixture/material" "warp:/run/fixture/warp" ];
     toplevelEvaluates = lib.hasSuffix ".drv" c.system.build.toplevel.drvPath;
     disabled = passed disabled && !disabled.services.fail2ban.enable && !disabled.services.openssh.enable

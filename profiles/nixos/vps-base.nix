@@ -5,6 +5,10 @@ let
   xray = config.services.xray.declarative;
   # Beat upstream mkDefault values without requiring callers to use mkForce.
   profileDefault = lib.mkOverride 900;
+  # The host's own addresses: through the proxy a client would reach local
+  # services past the firewall. Private ones are also in geoip:private.
+  hostAddresses = lib.unique (map (a: builtins.head (lib.splitString "/" a))
+    (lib.concatMap (n: n.address) (builtins.attrValues config.systemd.network.networks)));
   public = lib.recursiveUpdate {
     port = 443;
     tag = "nix-${config.networking.hostName}-vless";
@@ -18,7 +22,11 @@ let
       rules = [
         { type = "field"; ip = [ "geoip:private" ]; outboundTag = "blocked"; }
         { type = "field"; protocol = [ "bittorrent" ]; outboundTag = "blocked"; }
-      ] ++ lib.optional (xray.warp.enable && cfg.warpDomains != []) {
+        # Direct SMTP from clients would put spam complaints on this host's IP.
+        { type = "field"; port = "25"; outboundTag = "blocked"; }
+      ] ++ lib.optional (hostAddresses != [ ]) {
+        type = "field"; ip = hostAddresses; outboundTag = "blocked";
+      } ++ lib.optional (xray.warp.enable && cfg.warpDomains != []) {
         type = "field"; domain = map (d: "domain:${d}") cfg.warpDomains; outboundTag = "warp";
       };
     };
