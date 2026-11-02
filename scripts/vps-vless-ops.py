@@ -26,6 +26,103 @@ SERVICES = ("xray", "prometheus", "grafana", "alertmanager", "xray-exporter",
 UIS = {"grafana": 3000, "prometheus": 9090, "alertmanager": 9093}
 
 
+# Long help per command: description and examples, shown by `vps-vless HOST COMMAND -h`.
+DETAILS = {
+    "list": ("""\
+Print a JSON summary of the desired configuration in the checkout: host,
+layout, serverName, REALITY target, port and enabled clients. It reads only
+public files, never decrypts secrets and never connects to the VPS, so it
+shows what apply would deploy, not what is running now.""",
+             ["vps-vless list                 # all hosts in the checkout",
+              "vps-vless vps1 list            # one host"]),
+    "client": ("""\
+Manage VLESS clients in the local configuration. Changes reach the VPS only
+after an explicit apply.
+
+actions:
+  add NAME     enable a client and generate its credentials
+  remove NAME  disable a client (the diagnostic client `default` is kept)
+  link NAME    print the vless:// link for an enabled client (decrypts, no write)
+  rotate NAME  replace one client's UUID after typed confirmation; the old
+               link stops working after apply, other clients stay unchanged
+  sync         generate credentials for enabled clients that lack them
+  import NAME  probe the client over HTTPS from this computer, then write one
+               local client provider file (0600); no SSH and no apply""",
+               ["vps-vless vps1 client add alice",
+                "vps-vless vps1 client link alice",
+                "vps-vless vps1 client link alice --address 203.0.113.5",
+                "vps-vless vps1 client rotate alice",
+                "vps-vless vps1 client remove alice",
+                "vps-vless vps1 client sync",
+                "vps-vless vps1 client import alice",
+                "vps-vless vps1 apply            # deploy the change"]),
+    "telegram": ("""\
+Set or disable the local Telegram alert binding. `set` asks for the bot token
+with hidden input (empty input keeps the saved token) and stores it encrypted;
+the chat ID comes from --chat-id or a prompt. `disable` sets chat ID 0.
+The VPS changes only after apply.""",
+                 ["vps-vless vps1 telegram set --chat-id -1001234567890",
+                  "vps-vless vps1 telegram set     # prompts for chat ID and token",
+                  "vps-vless vps1 telegram disable",
+                  "vps-vless vps1 apply"]),
+    "ssh": ("""\
+Open an interactive administrative SSH session with the profile user, port
+and pinned host key. Options override the connection for SSH migrations.""",
+            ["vps-vless vps1 ssh",
+             "vps-vless vps1 ssh --key ~/.ssh/vps1-admin",
+             "vps-vless vps1 ssh --address 203.0.113.5 --ssh-port 22"]),
+    "tunnel": ("""\
+Forward a monitoring web UI from the VPS loopback to 127.0.0.1 on this
+computer. It runs in the foreground and Ctrl-C closes it.
+UIs: grafana 3000, prometheus 9090, alertmanager 9093.""",
+               ["vps-vless vps1 tunnel                     # grafana on http://127.0.0.1:3000/",
+                "vps-vless vps1 tunnel prometheus",
+                "vps-vless vps1 tunnel alertmanager --local-port 19093"]),
+    "status": ("""\
+Show systemd states of the profile services over SSH: xray, prometheus,
+grafana, alertmanager and exporters. Read only.""",
+               ["vps-vless vps1 status"]),
+    "logs": ("""\
+Print the journal of one allowlisted service over SSH. The journal may
+contain secrets, so do not paste it publicly.""",
+             ["vps-vless vps1 logs                      # last 100 lines of xray",
+              "vps-vless vps1 logs grafana --lines 500",
+              "vps-vless vps1 logs xray --follow"]),
+    "restart": ("""\
+Restart one allowlisted service over SSH after typed confirmation
+(RESTART HOST SERVICE). It may interrupt the proxy or monitoring and does
+not apply local configuration.""",
+                ["vps-vless vps1 restart xray",
+                 "vps-vless vps1 restart grafana --force   # skip typed confirmation"]),
+    "apply": ("""\
+Build the NixOS system locally, validate the Xray configuration with the
+secrets, then switch the VPS after typed confirmation (APPLY HOST).
+Never formats disks and makes no backup.
+
+If the host flake declares deploy.nodes.HOST, deploy-rs performs the switch
+with automatic and magic rollback: a failed activation or a lost SSH
+connection returns the previous generation. Otherwise the closure is copied
+and switched directly without rollback. Build progress and deploy output go
+to the terminal. --check stops after local validation without SSH.""",
+              ["vps-vless vps1 apply --check     # build and validate only",
+               "vps-vless vps1 apply",
+               "vps-vless vps1 apply --key ~/.ssh/vps1-admin"]),
+    "build": ("""\
+Build the NixOS system and validate the Xray configuration locally, showing
+build progress. No SSH; the VPS is unchanged. Use it to fill the Nix store
+before apply.""",
+              ["vps-vless vps1 build"]),
+    "warmup": ("""\
+Alias for build: local build and validation with progress. No SSH; the VPS
+is unchanged.""",
+               ["vps-vless vps1 warmup"]),
+}
+
+
+def examples(lines):
+    return "examples:\n" + "\n".join("  " + line for line in lines)
+
+
 def port(value):
     value = int(value)
     if not 1 <= value <= 65535:
@@ -35,7 +132,9 @@ def port(value):
 
 def add_parsers(sub, formatter):
     for name in sorted(COMMANDS):
-        q = sub.add_parser(name, formatter_class=formatter, help={
+        description, sample = DETAILS[name]
+        q = sub.add_parser(name, formatter_class=formatter, description=description,
+                           epilog=examples(sample), help={
             "list": "list local public VLESS hosts/clients; no secrets or SSH",
             "client": "edit clients, export a link or import a verified local provider; no deploy",
             "telegram": "set/disable local Telegram binding; hidden token prompt, no deploy",

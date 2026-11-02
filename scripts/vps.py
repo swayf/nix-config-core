@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Native VLESS/REALITY + WARP VPS provisioning and explicit operations.
 
-probe inventories remotely and optionally authorizes a temporary SSH key with consent;
-plan probes REALITY candidates when needed; check is local.
-secrets creates credentials
-and registers WARP on the source VPS via saved SSH (using secrets implies accepting Cloudflare terms). install is staged and
-destructive only after a second authenticated inventory in the installer.
+probe inventories remotely and optionally authorizes a temporary SSH key with
+consent; plan probes REALITY candidates when needed; check is local. secrets
+creates credentials and registers WARP on the source VPS via saved SSH (using
+secrets implies accepting Cloudflare terms). install is staged and destructive
+only after a second authenticated inventory in the installer.
 """
 import argparse
 import base64
@@ -1818,7 +1818,8 @@ def verify(args, repo, state, host):
     return 0 if successful else 2
 
 
-class DefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+class DefaultsHelpFormatter(argparse.RawDescriptionHelpFormatter, argparse.ArgumentDefaultsHelpFormatter):
+    # Descriptions and examples keep their line breaks; option help is still wrapped.
     def _get_help_string(self, action):
         # Runtime fallbacks are described explicitly instead of displaying None.
         if action.default is None:
@@ -1829,6 +1830,74 @@ class DefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
 PUBLIC_USAGE = ("vps-vless [-h] [--repo REPO] [--state-dir STATE_DIR] [--debug] HOST COMMAND [ARGS ...]\n"
                 "       vps-vless [-h] [--repo REPO] [--state-dir STATE_DIR] [--debug] list")
 GLOBAL_VALUE_OPTIONS = {"--repo", "--state-dir"}
+PUBLIC_EPILOG = """\
+commands (details and examples: vps-vless HOST COMMAND -h):
+  provisioning   probe, plan, secrets, check, install, verify
+  configuration  list, client, telegram           (local only, no deploy)
+  deploy         build, warmup, apply
+  operations     ssh, tunnel, status, logs, restart
+
+new host:
+  vps-vless vps1 probe 203.0.113.5 --key ~/.ssh/id_ed25519
+  vps-vless vps1 plan ~/.ssh/vps1-admin.pub
+  vps-vless vps1 secrets
+  vps-vless vps1 check
+  vps-vless vps1 install
+  vps-vless vps1 verify --send-test-alert
+
+change and deploy:
+  vps-vless vps1 client add alice
+  vps-vless vps1 apply --check
+  vps-vless vps1 apply
+  vps-vless vps1 client link alice
+
+inspect:
+  vps-vless list
+  vps-vless vps1 status
+  vps-vless vps1 logs xray --follow
+  vps-vless vps1 tunnel grafana"""
+# Long help for provisioning commands: description and examples.
+LIFECYCLE = {
+    "probe": ("""\
+Connect to the current server (Ubuntu or a NixOS installer) over SSH and save
+an inventory: firmware, disk, network and DNS. Without --key it asks for the SSH password
+and can offer a temporary key, so later steps run without a password.""",
+              ["vps-vless vps1 probe 203.0.113.5",
+               "vps-vless vps1 probe 203.0.113.5 --key ~/.ssh/id_ed25519",
+               "vps-vless vps1 probe 203.0.113.5 --user ubuntu --port 2222"]),
+    "plan": ("""\
+Generate the local host configuration from the saved inventory: network mode,
+REALITY target, SSH port, DNS and WARP domains. KEY.pub are the future
+administrator public keys. Existing files are never overwritten without --force.""",
+             ["vps-vless vps1 plan ~/.ssh/vps1-admin.pub",
+              "vps-vless vps1 plan ~/.ssh/vps1-admin.pub --target www.example.com --ssh-port 2202",
+              "vps-vless vps1 plan ~/.ssh/a.pub ~/.ssh/b.pub --dns 1.1.1.1 --dns 9.9.9.9 --warp-domain example.org"]),
+    "secrets": ("""\
+Create host keys, VLESS, WARP and Telegram credentials and encrypt them with
+SOPS/age. Registers WARP from the source VPS over the saved SSH connection;
+using it accepts Cloudflare terms.""",
+                ["vps-vless vps1 secrets",
+                 "vps-vless vps1 secrets --bootstrap-dir ~/.ssh/vps1/"]),
+    "check": ("""\
+Build the NixOS system and validate the configuration with the secrets
+locally. No SSH; the server is unchanged.""",
+              ["vps-vless vps1 check",
+               "vps-vless vps1 check --vm-test    # also run the NixOS VM test"]),
+    "install": ("""\
+Install NixOS on the server in one run. It detects Ubuntu or a running NixOS
+installer, repeats the inventory inside the installer and ERASES the disk only
+after one typed confirmation. Reuses the saved SSH identity or asks for the
+source password.""",
+                ["vps-vless vps1 install",
+                 "vps-vless vps1 install --force   # accept the confirmation automatically"]),
+    "verify": ("""\
+Acceptance test of the installed system: SSH host key, services, ports,
+loopback, Prometheus, REALITY and WARP routing. --send-test-alert also sends
+Telegram test alerts and asks you to confirm receipt.""",
+               ["vps-vless vps1 verify",
+                "vps-vless vps1 verify --send-test-alert",
+                "vps-vless vps1 verify --key ~/.ssh/vps1-admin"]),
+}
 
 
 def public_argv(p, argv):
@@ -1853,7 +1922,7 @@ def public_argv(p, argv):
 
 def parser():
     p = argparse.ArgumentParser(prog="vps-vless", usage=PUBLIC_USAGE, description=__doc__,
-                                formatter_class=DefaultsHelpFormatter)
+                                epilog=PUBLIC_EPILOG, formatter_class=DefaultsHelpFormatter)
     p.add_argument("--repo", type=Path, default=Path(os.environ.get("HM_FLAKE", os.getcwd())),
                    help="flake checkout; HM_FLAKE if set, otherwise current directory")
     p.add_argument("--state-dir", type=Path, default=None,
@@ -1898,7 +1967,11 @@ def parser():
     q.add_argument("--key", type=Path, help="installed NixOS administrator private SSH key (default: first adminKeyFiles path without .pub; legacy plans require --key)")
     q.add_argument("--send-test-alert", action="store_true", help="send Telegram test alerts and confirm receipt interactively")
     q.add_argument("--direct-test-url", help="unrouted HTTPS endpoint returning plain IPv4 (default: https://www.cloudflare.com/cdn-cgi/trace, then https://api.ipify.org; first endpoint not routed through WARP)")
-    load(SOURCE / "vps-vless-ops.py", "vps_vless_ops").add_parsers(sub, DefaultsHelpFormatter)
+    ops = load(SOURCE / "vps-vless-ops.py", "vps_vless_ops")
+    ops.add_parsers(sub, DefaultsHelpFormatter)
+    for name, (description, sample) in LIFECYCLE.items():
+        sub.choices[name].description = description
+        sub.choices[name].epilog = ops.examples(sample)
     for name, command in sub.choices.items():
         if name != "install":
             command.add_argument("--force", action="store_true",
