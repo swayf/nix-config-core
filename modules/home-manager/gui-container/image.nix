@@ -18,12 +18,14 @@ let
       "ru_RU.UTF-8/UTF-8"
     ];
   };
-  fonts = pkgs.makeFontsConf {
-    fontDirectories = [
-      pkgs.dejavu_fonts
-      pkgs.noto-fonts-color-emoji
-    ];
-  };
+  # corefonts/vista-fonts are unfree, built locally like google-chrome below.
+  fontPackages = [
+    pkgs.corefonts
+    pkgs.vista-fonts
+    pkgs.dejavu_fonts
+    pkgs.noto-fonts-color-emoji
+  ];
+  fonts = pkgs.makeFontsConf { fontDirectories = fontPackages; };
   graphics = pkgs.buildEnv {
     name = "gui-container-mesa";
     paths = [
@@ -111,11 +113,9 @@ let
         pkgs.dnsutils
         pkgs.cacert
         pkgs.fontconfig
-        pkgs.dejavu_fonts
-        pkgs.noto-fonts-color-emoji
         pkgs.adwaita-icon-theme
         pkgs.hicolor-icon-theme
-      ];
+      ] ++ fontPackages;
     pathsToLink = [
       "/bin"
       "/etc"
