@@ -126,6 +126,7 @@ in
             rollback [ID|NAME]     back one generation, or to an id or a mark
             diff [git diff args]   show core, then HM changes (git diff HEAD)
             diff-closures [ID|NAME] diff closures against the active generation
+            <name> [args]          run the plugin hm-<name> from PATH (with HM_FLAKE, HM_PROFILE)
 
           flake: $flake  (override with \$HM_FLAKE)
           profile: $profile  (override with \$HM_PROFILE)
@@ -584,6 +585,13 @@ in
               usage
               ;;
             *)
+              # Plugins, as in git: `hm foo args` runs `hm-foo args` from PATH, so
+              # a private checkout can add commands without patching this file.
+              # The name check keeps `hm ../x` or `hm 'a b'` from reaching PATH.
+              if [[ $cmd =~ ^[a-z0-9][a-z0-9-]*$ ]] && plugin="$(command -v "hm-$cmd")"; then
+                export HM_FLAKE="$flake" HM_PROFILE="$profile"
+                exec "$plugin" "$@"
+              fi
               echo "hm: неизвестная команда '$cmd'" >&2
               usage
               exit 1

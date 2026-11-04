@@ -83,6 +83,11 @@ _hm() {
   )
 
   if (( CURRENT == 2 )); then
+    # Plugins: every hm-<name> on PATH is offered as `hm <name>`.
+    local plugin
+    for plugin in ${(k)commands[(I)hm-*]}; do
+      cmds+=("${plugin#hm-}:плагин $plugin")
+    done
     _describe -t commands 'hm' cmds
     return
   fi
