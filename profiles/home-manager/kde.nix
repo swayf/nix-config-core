@@ -2,9 +2,13 @@
 # Home Manager configures the user session, it does not install the desktop OS.
 {
   config,
+  lib,
   pkgs,
   ...
 }:
+let
+  kitty = config.programs.kitty;
+in
 {
   imports = [
     ./desktop-common.nix
@@ -20,7 +24,6 @@
   home.packages = with pkgs.kdePackages; [
     dolphin
     konsole
-    yakuake
     okular
     filelight
     ark
@@ -51,10 +54,18 @@
       key = "Ctrl+Space";
       command = "${config.programs.vicinae.package}/bin/vicinae toggle";
     };
-    shortcuts.yakuake.toggle-window-state = "F12";
-    configFile = {
-      # Yakuake uses Konsole profiles; preserve ddterm's audible BEL.
-      yakuakerc."Desktop Entry".DefaultProfile = "HomeManager.profile";
+    # Yakuake used to own F12. overrideConfig = false keeps an old binding in
+    # kglobalshortcutsrc, so release it explicitly ("none").
+    shortcuts.yakuake.toggle-window-state = [ ];
+
+    # The dropdown terminal is Kitty's quick-access-terminal: KWin has the
+    # wlr-layer-shell it needs (GNOME does not, see desktop/kitty.nix), and the
+    # agents rely on Kitty graphics and the Kitty keyboard protocol, which
+    # Konsole/Yakuake lack. The caller decides whether Kitty is installed.
+    hotkeys.commands.kitty-quick-access = lib.mkIf kitty.enable {
+      name = "Kitty dropdown terminal";
+      key = "F12";
+      command = "${kitty.package}/bin/kitten quick-access-terminal";
     };
   };
 
@@ -71,14 +82,17 @@
     };
   };
 
-  xdg.configFile."autostart/yakuake-home-manager.desktop".text = ''
-    [Desktop Entry]
-    Type=Application
-    Name=Yakuake (Home Manager)
-    Exec=${pkgs.kdePackages.yakuake}/bin/yakuake
-    OnlyShowIn=KDE;
-    Terminal=false
-  '';
+  # Start hidden at login so the first F12 does not wait for Kitty to start.
+  xdg.configFile."autostart/kitty-quick-access-home-manager.desktop" = lib.mkIf kitty.enable {
+    text = ''
+      [Desktop Entry]
+      Type=Application
+      Name=Kitty dropdown terminal (Home Manager)
+      Exec=${kitty.package}/bin/kitten quick-access-terminal -o start_as_hidden=yes
+      OnlyShowIn=KDE;
+      Terminal=false
+    '';
+  };
 
   # Dolphin handles clipboard text -> new file natively via Ctrl+V, replacing
   # the Nautilus scripts/extension. Do not replace browser defaults from common.
