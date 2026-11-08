@@ -62,11 +62,22 @@ in
     # wlr-layer-shell it needs (GNOME does not, see desktop/kitty.nix), and the
     # agents rely on Kitty graphics and the Kitty keyboard protocol, which
     # Konsole/Yakuake lack. The caller decides whether Kitty is installed.
+    # Alt+Space is physical Win+Space under altwin:ctrl_alt_win (physical
+    # Alt+Space is Ctrl+Space, Vicinae).
     hotkeys.commands.kitty-quick-access = lib.mkIf kitty.enable {
       name = "Kitty dropdown terminal";
-      key = "F12";
+      keys = [
+        "F12"
+        "Alt+Space"
+      ];
       command = "${kitty.package}/bin/kitten quick-access-terminal";
     };
+    # KRunner's default is Alt+Space,Alt+F2,Search (plasma-workspace
+    # krunner/org.kde.krunner.desktop.cmake). Release Alt+Space for Kitty.
+    krunner.shortcuts.launch = lib.mkIf kitty.enable [
+      "Alt+F2"
+      "Search"
+    ];
   };
 
   programs.konsole = {
