@@ -108,6 +108,36 @@ prepare_store() {
   done
   printf 'keep-id-root-v1\n' > "$AGENTS_STATE/nix-daemon-layout"
 }
+#@if host-daemon
+
+# The host daemon sees the agent as this host user (the same UID). Refuse
+# unless that user is untrusted: a trusted agent could reconfigure the daemon.
+require_untrusted_host_daemon() {
+  local info
+  # NIX_REMOTE, not --store: an untrusted client's store override only warns.
+  if ! info=$(NIX_REMOTE=daemon nix --extra-experimental-features nix-command store info --json); then
+    echo 'Cannot query the host Nix daemon; no container was changed.' >&2
+    return 1
+  fi
+  if ! jq -e '.trusted == false or .trusted == 0' <<< "$info" >/dev/null; then
+    echo 'The host Nix daemon trusts this user or does not report trust; the agent would share it. Keep nix.settings.trusted-users = [ "root" ]. No container was changed.' >&2
+    return 1
+  fi
+}
+
+# The daemon resolves indirect GC roots in the host mount namespace, so the
+# agent profile lives at the same absolute path on the host and in the workspace.
+prepare_host_roots() {
+  local roots=$AGENTS_STATE/nix-roots link=$AGENTS_STATE/home/.nix-profile
+  mkdir -p "$roots/profiles"
+  chmod 700 "$roots"
+  if [[ -e $link && ! -L $link ]]; then
+    echo "$link is not a symlink; the agent profile was not replaced." >&2
+    return 1
+  fi
+  ln -sfn "$roots/profiles/profile" "$link"
+}
+#@end
 
 podman_step() {
   local label=$1
@@ -272,6 +302,9 @@ up() {
       fi
     fi
   fi
+#@if host-daemon
+  require_untrusted_host_daemon || return 1
+#@end
   refresh_nix_auth
   # Contains only the explicitly declared keys, never the host's whole SOPS tree.
   # A directory mount makes atomic rotations visible to new entrypoint invocations.
@@ -333,14 +366,27 @@ up() {
     [[ $web_link_ready == true ]] || { echo 'Host browser bridge did not start.' >&2; return 1; }
     web_link_args+=(--mount "type=bind,src=$web_link_dir,dst=/run/agents-web-links,ro=true")
   fi
+#@if private-store
   if [[ $workspace_running == true ]] && running "$gateway" && running "$daemon"; then
     local current_work current_gateway current_daemon current_spec
+#@end
+#@if host-daemon
+  if [[ $workspace_running == true ]] && running "$gateway"; then
+    local current_work current_gateway current_spec
+#@end
     current_work=$(p inspect --format '{{.ImageName}}' "$work")
     current_gateway=$(p inspect --format '{{.ImageName}}' "$gateway")
+#@if private-store
     current_daemon=$(p inspect --format '{{.ImageName}}' "$daemon")
+#@end
     current_spec=$(p inspect --format '{{index .Config.Labels "home-manager.agents.spec"}}' "$work")
+#@if private-store
     if [[ $current_work == "$AGENTS_IMAGE_REF" && $current_daemon == "$AGENTS_IMAGE_REF" && $current_gateway == "$AGENTS_GATEWAY_REF" && $current_spec == "$AGENTS_SPEC" ]]; then
       wait_nix_daemon || return 1
+#@end
+#@if host-daemon
+    if [[ $current_work == "$AGENTS_IMAGE_REF" && $current_gateway == "$AGENTS_GATEWAY_REF" && $current_spec == "$AGENTS_SPEC" ]]; then
+#@end
       wait_workspace_ready || return 1
       prune_old_images
       return
@@ -348,11 +394,19 @@ up() {
   fi
   echo 'Checking host requirements...' >&2
   doctor >&2
+#@if private-store
   validate_store_layout
+#@end
   remove_containers
   mkdir -p "$AGENTS_STATE/home" "$AGENTS_PROJECTS"
+#@if private-store
   echo 'Preparing the private daemon-owned Nix store...' >&2
   prepare_store
+#@end
+#@if host-daemon
+  # The private nix-root, if any, stays untouched for rollback.
+  prepare_host_roots || return 1
+#@end
   load_images
   printf 'nameserver 1.1.1.1\noptions timeout:2 attempts:2\n' > "$AGENTS_STATE/resolv.conf"
   podman_step 'Creating network gateway' create --name "$gateway" --pull=never --http-proxy=false \
@@ -375,6 +429,7 @@ up() {
     return 1
   fi
   echo 'Network gateway and default-deny firewall are ready.' >&2
+#@if private-store
   # Reuse the seeded workspace image, but not its agent entrypoint, HOME,
   # projects, devices, credentials environment or process namespace.
   podman_step 'Creating private Nix daemon' create --name "$daemon" --init --pull=never --http-proxy=false \
@@ -391,6 +446,7 @@ up() {
     --entrypoint /bin/nix-daemon "$AGENTS_IMAGE_REF" --option build-users-group nixbld
   podman_step 'Starting private Nix daemon' start "$daemon"
   wait_nix_daemon || return 1
+#@end
   # Nested slirp creates a TUN in its OWN child netns. The device grants no
   # NET_ADMIN over the outer namespace or the gateway firewall.
   local -a device_args=(--group-add=keep-groups)
@@ -412,9 +468,16 @@ up() {
     "${web_link_args[@]}" \
     --mount "type=bind,src=$AGENTS_STATE/home,dst=$AGENTS_HOME" \
     --mount "type=bind,src=$AGENTS_PROJECTS,dst=$AGENTS_HOME/@projectDirectoryName@" \
+#@if private-store
     --mount "type=bind,src=$AGENTS_STATE/nix-root/nix,dst=/nix,ro=true" \
     --mount "type=bind,src=$AGENTS_STATE/nix-root/nix/var/nix/profiles/per-user/$AGENTS_USER,dst=/nix/var/nix/profiles/per-user/$AGENTS_USER" \
     --mount "type=bind,src=$AGENTS_STATE/nix-root/nix/var/nix/gcroots/per-user/$AGENTS_USER,dst=/nix/var/nix/gcroots/per-user/$AGENTS_USER" \
+#@end
+#@if host-daemon
+    --mount "type=bind,src=/nix/store,dst=/nix/store,ro=true" \
+    --mount "type=bind,src=/nix/var/nix/daemon-socket,dst=/nix/var/nix/daemon-socket,ro=true" \
+    --mount "type=bind,src=$AGENTS_STATE/nix-roots,dst=$AGENTS_STATE/nix-roots" \
+#@end
     --mount "type=bind,src=$AGENTS_STATE/resolv.conf,dst=/etc/resolv.conf,ro=true" \
     --mount "type=bind,src=$AGENTS_STATE/nix-auth,dst=/run/agents-nix-auth,ro=true" \
     --mount "type=bind,src=$secret_directory,dst=/run/agents-secret-environment,ro=true" \
@@ -429,7 +492,12 @@ up() {
 case "$command" in
   up) up ;;
   down) remove_containers ;;
+#@if private-store
   rebuild) validate_store_layout; remove_containers; up ;;
+#@end
+#@if host-daemon
+  rebuild) require_untrusted_host_daemon || exit 1; remove_containers; up ;;
+#@end
   doctor) doctor ;;
   status) p ps -a --filter "name=^@workspaceName@" ;;
   logs) p logs "$gateway" ;;
@@ -453,7 +521,13 @@ case "$command" in
       set -e
       date +"%F %T %Z %z"
       if [[ $1 == 1 ]]; then test -r /dev/kvm && test -w /dev/kvm; fi
+#@if private-store
       test "$(stat -c %u /nix/store)" = 0
+#@end
+#@if host-daemon
+      nix store info --json | grep -Eq "\"trusted\":(false|0)[,}]" ||
+        { echo "agents: the host Nix daemon trusts the agent" >&2; exit 1; }
+#@end
       case ",$(findmnt -n -o VFS-OPTIONS -T /nix/store)," in
         *,ro,*) ;; *) echo "agents: store mount is not read-only" >&2; exit 1 ;;
       esac

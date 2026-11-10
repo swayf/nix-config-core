@@ -12,7 +12,7 @@ let
     ]);
   };
 in pkgs.runCommand "agents-runtime-helper-contracts" {
-  nativeBuildInputs = [ pkgs.python3 pkgs.bash pkgs.coreutils pkgs.util-linux ];
+  nativeBuildInputs = [ pkgs.python3 pkgs.bash pkgs.coreutils pkgs.util-linux pkgs.jq ];
 } ''
   export HOME="$TMPDIR/home" XDG_RUNTIME_DIR="$TMPDIR/runtime" PYTHONDONTWRITEBYTECODE=1
   mkdir -p "$HOME" "$XDG_RUNTIME_DIR"

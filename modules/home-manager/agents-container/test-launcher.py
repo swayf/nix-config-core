@@ -57,8 +57,24 @@ def bounded_launcher(args, *, env, cwd=None, timeout=15):
                 raise OSError(ctypes.get_errno(), "fixture subreaper restore failed")
 
 
-def launcher_source(command_name="agents"):
-    return Path(__file__).with_name("launcher.sh").read_text().replace(
+def select_mode(text, mode):
+    """Mirror launcher.nix: keep `#@if <mode>` blocks of one mode, drop markers."""
+    lines, block = [], None
+    for line in text.split("\n"):
+        if line.startswith("#@if "):
+            assert block is None and line[5:] in ("host-daemon", "private-store"), line
+            block = line[5:]
+        elif line == "#@end":
+            assert block is not None
+            block = None
+        elif block is None or block == mode:
+            lines.append(line)
+    assert block is None
+    return "\n".join(lines)
+
+
+def launcher_source(command_name="agents", mode="private-store"):
+    return select_mode(Path(__file__).with_name("launcher.sh").read_text(), mode).replace(
         "@workspaceName@", "agents-dallas").replace(
         "@gatewayName@", "agents-dallas-gateway").replace(
         "@projectDirectoryName@", "projects").replace(
@@ -231,6 +247,14 @@ class LauncherDoctorTest(unittest.TestCase):
         self.assertEqual(self.doctor().returncode, 0)
 
 
+def fixture_launcher(source):
+    prefix, dispatch = source.split('case "$command" in\n', 1)
+    # Shrink only the readiness polling window in fixtures; production
+    # retains 30 seconds. Real client timeout/cleanup behaviour is unchanged.
+    prefix = prefix.replace("SECONDS + 30", "SECONDS + 1")
+    return prefix + '\ndoctor() { :; }\ncase "$command" in\n' + dispatch
+
+
 class LauncherImageCleanupTest(unittest.TestCase):
     work_ref = "localhost/agents-dallas:new"
     gateway_ref = "localhost/agents-dallas-gateway:new"
@@ -384,13 +408,8 @@ sys.exit(status)
                         TEST_PODMAN_STATE=str(self.state_path), TEST_GRAPH_ROOT=str(self.store))
         # Exercise the actual dispatcher and lifecycle; stub only host device/
         # UID checks, which cannot run on an arbitrary unit-test host.
-        source = launcher_source()
-        prefix, dispatch = source.split('case "$command" in\n', 1)
         self.launcher = self.base / "launcher.sh"
-        # Shrink only the readiness polling window in fixtures; production
-        # retains 30 seconds. Real client timeout/cleanup behaviour is unchanged.
-        prefix = prefix.replace("SECONDS + 30", "SECONDS + 1")
-        self.launcher.write_text(prefix + '\ndoctor() { :; }\ncase "$command" in\n' + dispatch)
+        self.launcher.write_text(fixture_launcher(launcher_source()))
 
     def run_launcher(self, command):
         self.state_path.write_text(json.dumps(self.state))
@@ -978,6 +997,117 @@ sys.exit(status)
         result = self.run_launcher("down")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(any(c[0] in ("images", "rmi") for c in self.state["calls"]))
+
+
+class LauncherHostDaemonTest(unittest.TestCase):
+    """The same fake Podman lifecycle, rendered for the host Nix daemon."""
+
+    work_ref = LauncherImageCleanupTest.work_ref
+    gateway_ref = LauncherImageCleanupTest.gateway_ref
+    old_work = LauncherImageCleanupTest.old_work
+    old_gateway = LauncherImageCleanupTest.old_gateway
+    used_image = LauncherImageCleanupTest.used_image
+    run_launcher = LauncherImageCleanupTest.run_launcher
+    creation = LauncherImageCleanupTest.creation
+
+    def setUp(self):
+        LauncherImageCleanupTest.setUp(self)
+        self.launcher.write_text(fixture_launcher(launcher_source(mode="host-daemon")))
+        nix = self.bin / "nix"
+        nix.write_text(
+            '#!/bin/bash\n'
+            '[[ $NIX_REMOTE == daemon && " $* " == *" store info --json "* ]] || exit 3\n'
+            'if [[ -v TEST_STORE_INFO ]]; then printf "%s\\n" "$TEST_STORE_INFO"\n'
+            'else echo \'{"trusted":false,"url":"daemon","version":"2.34.9"}\'; fi\n'
+        )
+        self.state_dir = Path(self.env["AGENTS_STATE"])
+
+    def current_containers(self):
+        self.state["containers"].update({
+            "agents-dallas": {"image": self.work_ref, "running": True, "init": True},
+            "agents-dallas-gateway": {"image": self.gateway_ref, "running": True},
+        })
+
+    def test_renders_have_no_markers_and_differ_only_by_mode(self):
+        private, host = launcher_source(), launcher_source(mode="host-daemon")
+        self.assertNotIn("#@", private + host)
+        self.assertNotIn("require_untrusted_host_daemon", private)
+        self.assertNotIn("prepare_store", host.split("prepare_store() {", 1)[1].split("\n}\n", 1)[1])
+
+    def test_mounts_only_host_store_socket_and_roots(self):
+        result = self.run_launcher("up")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        workspace = self.creation()
+        roots = f"{self.state_dir}/nix-roots"
+        for mount in ("type=bind,src=/nix/store,dst=/nix/store,ro=true",
+                      "type=bind,src=/nix/var/nix/daemon-socket,dst=/nix/var/nix/daemon-socket,ro=true",
+                      f"type=bind,src={roots},dst={roots}"):
+            self.assertIn(mount, workspace)
+        self.assertFalse(any("nix-root/" in arg or "dst=/nix," in arg for arg in workspace))
+        self.assertFalse(any(c[0] == "unshare" for c in self.state["calls"]))
+        self.assertFalse(any(c[0] == "create" and c[c.index("--name") + 1] == "agents-dallas-nix"
+                             for c in self.state["calls"]))
+        self.assertEqual(os.readlink(self.state_dir / "home/.nix-profile"), f"{roots}/profiles/profile")
+        self.assertEqual((self.state_dir / "nix-roots").stat().st_mode & 0o777, 0o700)
+
+    def test_trusted_or_unreported_daemon_refuses_before_any_change(self):
+        self.current_containers()
+        for info in ('{"trusted":true,"url":"daemon"}', '{"trusted":1}', '{"url":"daemon"}', ''):
+            with self.subTest(info=info):
+                self.state["calls"] = []
+                self.env["TEST_STORE_INFO"] = info
+                result = self.run_launcher("rebuild")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("trusts this user or does not report trust", result.stderr)
+                self.assertFalse(any(c[0] in ("create", "rm", "start") for c in self.state["calls"]))
+
+    def test_unreachable_daemon_refuses(self):
+        (self.bin / "nix").write_text("#!/bin/bash\nexit 1\n")
+        result = self.run_launcher("up")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("Cannot query the host Nix daemon", result.stderr)
+        self.assertFalse(any(c[0] in ("create", "rm", "start") for c in self.state["calls"]))
+
+    def test_running_workspace_is_reused_without_daemon_container(self):
+        self.current_containers()
+        result = self.run_launcher("up")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(c[0] in ("create", "rm", "start") for c in self.state["calls"]))
+
+    def test_switch_from_private_store_removes_sidecar_and_keeps_nix_root(self):
+        self.current_containers()
+        self.state["containers"]["agents-dallas-nix"] = {"image": self.work_ref, "running": True}
+        store = self.state_dir / "nix-root/nix/store"
+        store.mkdir(parents=True)
+        result = self.run_launcher("rebuild")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        removals = [c[-1] for c in self.state["calls"] if c[0] == "rm"]
+        self.assertEqual(removals, ["agents-dallas", "agents-dallas-nix", "agents-dallas-gateway"])
+        self.assertTrue(store.is_dir())
+        self.assertNotIn("agents-dallas-nix", self.state["containers"])
+
+    def test_profile_directory_is_never_replaced(self):
+        profile = self.state_dir / "home/.nix-profile"
+        profile.mkdir(parents=True)
+        result = self.run_launcher("up")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("is not a symlink", result.stderr)
+        self.assertTrue(profile.is_dir())
+        self.assertFalse(any(c[0] == "create" and c[c.index("--name") + 1] == "agents-dallas"
+                             for c in self.state["calls"]))
+
+    def test_check_requires_untrusted_daemon_not_root_owned_store(self):
+        self.current_containers()
+        curl = self.bin / "curl"
+        curl.write_text("#!/bin/bash\nexit 0\n")
+        curl.chmod(0o755)
+        self.env["AGENTS_PROXY"] = "http://127.0.0.1:2081"
+        result = self.run_launcher("check")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        script = next(c for c in reversed(self.state["calls"]) if c[0] == "exec")[-3]
+        self.assertNotIn("stat -c %u /nix/store", script)
+        self.assertIn('nix store info --json | grep -Eq "\\"trusted\\":(false|0)[,}]"', script)
+        self.assertIn("*,ro,*", script)
 
 
 if __name__ == "__main__":

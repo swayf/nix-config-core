@@ -8,6 +8,19 @@ ROOT = Path(__file__).resolve().parents[1]
 HM = ROOT / "modules/home-manager"
 
 
+def select_mode(text, mode):
+    """The launcher.nix render rule: keep `#@if <mode>` blocks of one mode."""
+    lines, block = [], None
+    for line in text.split("\n"):
+        if line.startswith("#@if "):
+            block = line[5:]
+        elif line == "#@end":
+            block = None
+        elif block in (None, mode):
+            lines.append(line)
+    return "\n".join(lines)
+
+
 class AgentsDependencies(unittest.TestCase):
     def test_exact_edges(self):
         edges = {
@@ -49,14 +62,23 @@ class AgentsDependencies(unittest.TestCase):
     def test_workspace_security_contract(self):
         text = (HM / "agents-container/launcher.sh").read_text()
         work = text.split("Creating workspace container", 1)[1].split("Starting workspace container", 1)[0]
-        for token in ("--init", "--shm-size=1g", "--pids-limit=4096", "--cap-drop=ALL",
-                      "--cap-add=SETUID", "--cap-add=SETGID", "--userns=keep-id", "--network=\"container:$gateway\""):
-            self.assertIn(token, work)
-        for token in ("--privileged", "--cap-add=NET_ADMIN", "--cap-add=SYS_ADMIN", "--ipc=host",
-                      "docker.sock", "daemon-socket", "src=/nix", "wayland-0", "/pulse/"):
-            self.assertNotIn(token, work)
-        self.assertIn("dst=/run/agents-secret-environment,ro=true", work)
-        self.assertIn("dst=/run/agents-nix-auth,ro=true", work)
+        private, host = select_mode(work, "private-store"), select_mode(work, "host-daemon")
+        for work in (private, host):
+            for token in ("--init", "--shm-size=1g", "--pids-limit=4096", "--cap-drop=ALL",
+                          "--cap-add=SETUID", "--cap-add=SETGID", "--userns=keep-id", "--network=\"container:$gateway\""):
+                self.assertIn(token, work)
+            for token in ("--privileged", "--cap-add=NET_ADMIN", "--cap-add=SYS_ADMIN", "--ipc=host",
+                          "docker.sock", "wayland-0", "/pulse/"):
+                self.assertNotIn(token, work)
+            self.assertIn("dst=/run/agents-secret-environment,ro=true", work)
+            self.assertIn("dst=/run/agents-nix-auth,ro=true", work)
+        for token in ("daemon-socket", "src=/nix"):
+            self.assertNotIn(token, private)
+        # Host-daemon mode (opt-in): only the read-only store and socket directory.
+        self.assertEqual(re.findall(r"src=/nix[^\"]*", host), [
+            "src=/nix/store,dst=/nix/store,ro=true",
+            "src=/nix/var/nix/daemon-socket,dst=/nix/var/nix/daemon-socket,ro=true",
+        ])
 
     def test_host_browser_runner_tracks_children_without_changing_guest(self):
         module = (HM / "agents-container.nix").read_text()

@@ -23,6 +23,7 @@ let
     inherit lib;
     inherit (cfg) workspaceName gatewayName projectDirectoryName shellCommand updateInput commandName;
     proxyLabel = cfg.proxy.label;
+    hostNixDaemon = cfg.hostNixDaemon.enable;
   };
   work = import ./agents-container/image.nix {
     inherit pkgs lib;
@@ -129,6 +130,16 @@ in
       default = "${cfg.workspaceName}-nix";
       description = "Private daemon sidecar name; the workspace has a read-only store.";
     };
+    hostNixDaemon.enable = lib.mkEnableOption ''
+      the host Nix daemon instead of the private store and its sidecar daemon.
+      Only /nix/store (read-only) and the host daemon socket directory are
+      mounted; the agent profile is kept in stateDirectory/nix-roots at the same
+      path on the host, so host GC sees it. The daemon sees the agent as the
+      host user: the launcher refuses to start unless that user is untrusted.
+      Substitution and builds use the host daemon's network path, not the
+      gateway. The agent can see the whole host store and can ask the daemon
+      to collect garbage. Requires a multi-user host Nix; a private nix-root
+      stays untouched for rollback'';
     projectDirectoryName = lib.mkOption { type = lib.types.strMatching "[A-Za-z0-9_-]+"; default = "projects"; };
     timeZone = lib.mkOption { type = lib.types.str; default = "UTC"; };
     shellCommand = lib.mkOption { type = lib.types.strMatching "[A-Za-z0-9_./-]+"; default = "bash"; };
@@ -298,6 +309,11 @@ in
           builtins.attrNames cfg.secretSources
         );
         message = "agents-container.secretSources keys must be valid environment variable names.";
+      }
+      {
+        # Mounted at the same path in the workspace; a comma would split the mount spec.
+        assertion = !cfg.hostNixDaemon.enable || builtins.match "/[^,\n]+" cfg.stateDirectory != null;
+        message = "agents-container.hostNixDaemon requires an absolute stateDirectory without commas.";
       }
       {
         assertion = cfg.proxy.listen == "127.0.0.1";
