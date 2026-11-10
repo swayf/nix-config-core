@@ -1,4 +1,6 @@
 # Shared Home Manager helper; profiles select their output and checkout path.
+# backend = "nixos" serves a host where Home Manager is a NixOS module: the
+# git commands stay, build/switch/generations go to nixos-rebuild.
 {
   config,
   lib,
@@ -25,18 +27,56 @@ in
       default = config.home.username;
       description = "Home Manager flake output used by hm; overridden at runtime by HM_PROFILE.";
     };
+    backend = lib.mkOption {
+      type = lib.types.enum [
+        "standalone"
+        "nixos"
+      ];
+      default = "standalone";
+      description = ''
+        standalone: hm builds and activates homeConfigurations.<profile> with the
+        home-manager CLI. nixos: Home Manager is a NixOS module; build, switch,
+        rollback, generations and diff-closures act on
+        nixosConfigurations.<nixosHost> and the system profile.
+      '';
+    };
+    nixosHost = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "nixosConfigurations output used by hm when backend is nixos.";
+    };
+    bootLabel = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        backend nixos: hm switch passes the newest hm/* tag and the commit time
+        of a clean checkout in HM_BOOT_LABEL and evaluates with --impure. The
+        NixOS configuration decides how to use the variable.
+      '';
+    };
   };
 
   config = {
-    # home-manager and nix come from PATH: use the CLI installed by this profile.
+    assertions = [
+      {
+        assertion = cfg.backend != "nixos" || cfg.nixosHost != null;
+        message = "programs.hm.backend = \"nixos\" requires programs.hm.nixosHost.";
+      }
+    ];
+
+    # home-manager, nix and nixos-rebuild come from PATH: use the CLI installed
+    # by this profile or the system.
     home.packages = [
       (pkgs.writeShellApplication {
         name = "hm";
         runtimeInputs = [
           pkgs.git
           pkgs.coreutils
-        ];
+        ] ++ (if cfg.backend == "nixos" then [ pkgs.jq pkgs.util-linux ] else [ ]);
         text = ''
+          backend=${lib.escapeShellArg cfg.backend}
+          host=${lib.escapeShellArg (if cfg.nixosHost == null then "" else cfg.nixosHost)}
+          boot_label_enabled=${if cfg.bootLabel then "1" else "\"\""}
           flake=${lib.escapeShellArg cfg.flakePath}
           profile=${lib.escapeShellArg cfg.profile}
           flake="''${HM_FLAKE:-$flake}"
@@ -45,6 +85,7 @@ in
           core_flake="''${HM_CORE_FLAKE-$core_flake}"
           core_args=()
           build_flake="$flake"
+          system_profile=/nix/var/nix/profiles/system
 
           # Nix treats an unescaped space/#/? as a different flake reference.
           git_uri() {
@@ -103,6 +144,66 @@ in
             done
           }
 
+          # nixos-rebuild is exec'd, so a temporary wrapper flake would outlive
+          # nothing that removes it: the local core replaces the root input
+          # directly. The NixOS configuration does not read self.rev.
+          prepare_nixos() {
+            prepare_core
+            [[ -n $core_flake ]] || return 0
+            core_args=(--override-input core "$(git_uri "$core_flake")" --no-write-lock-file)
+          }
+
+          # A Git flake leaves untracked files out of the build.
+          warn_untracked() {
+            local repo untracked
+            for repo in "$flake" ''${core_flake:+"$core_flake"}; do
+              mapfile -t untracked < <(git -C "$repo" ls-files --others --exclude-standard 2> /dev/null || true)
+              if (( ''${#untracked[@]} > 0 )); then
+                echo "hm: в $repo есть untracked-файлы, в сборку они не попадут (hm status добавит):" >&2
+                printf '  %s\n' "''${untracked[@]}" >&2
+              fi
+            done
+          }
+
+          # The newest hm/* tag (from `hm commit`; within one second the highest
+          # -N of hm commit's numbering) on HEAD, without the prefix, and the
+          # commit time HH:MM, for the boot menu. The commit time, not the
+          # switch time: a repeated switch of one commit builds the same system,
+          # not a new generation. A label allows no spaces. Nothing when a tree
+          # is dirty: the build is then not that commit.
+          boot_label() {
+            local tags tag stamp
+            if [[ -n "$(git -C "$flake" status --porcelain --untracked-files=no)" ]]; then
+              return 0
+            fi
+            if [[ -n $core_flake && -n "$(git -C "$core_flake" status --porcelain --untracked-files=no)" ]]; then
+              return 0
+            fi
+            stamp="$(git -C "$flake" log -1 --format=%cd --date=format-local:%H:%M)"
+            mapfile -t tags < <(git -C "$flake" tag --points-at HEAD --list 'hm/*' --sort=-version:refname --sort=-creatordate)
+            if (( ''${#tags[@]} == 0 )); then
+              printf '%s' "$stamp"
+              return 0
+            fi
+            tag="''${tags[0]#hm/}"
+            if [[ ! $tag =~ ^[a-zA-Z0-9:_.-]+$ ]]; then
+              echo "hm: тег ''${tags[0]} не годится в метку меню загрузки, только время" >&2
+              printf '%s' "$stamp"
+              return 0
+            fi
+            printf '%s' "$tag-$stamp"
+          }
+
+          # A system generation's store path from its numeric id.
+          resolve_system_gen() {
+            if [[ $1 =~ ^[0-9]+$ && -L "$system_profile-$1-link" ]]; then
+              readlink -f "$system_profile-$1-link"
+            else
+              echo "hm: нет системного поколения '$1' — см. hm generations" >&2
+              return 1
+            fi
+          }
+
           # Named GC roots, one symlink per mark. Duplicated in
           # scripts/_hm -- the completion resolves the same two defaults without
           # running this script, so the pair has to be changed together.
@@ -112,27 +213,77 @@ in
             cat <<EOF
           usage: hm <command> [args]
 
+          git:
             status                 stage/show core, then HM (git add -A)
+            diff [git diff args]   show core, then HM changes (git diff HEAD)
             commit [-t TAG] [msg]  commit core, then HM with the same message; tag HM (-n: none)
             push                   push core, then HM, including annotated tags (--follow-tags)
+          EOF
+            if [[ $backend == nixos ]]; then
+              cat <<EOF
+
+          build and activate (NixOS $host, Home Manager inside the system):
+            build [args]           nixos-rebuild build
+            switch [args]          nixos-rebuild switch (boot label from the hm/* tag)
+            update [args]          git pull --ff-only, then switch
+            flake-update [args]    update the flake inputs, commit them, switch
+            diff-closures [ID]     closure diff: next build, or generation ID, vs the running system
+
+          generations:
+            generations [args]     system generations with their boot labels
+            rollback [ID]          back one system generation, or to ID
+          EOF
+            else
+              cat <<EOF
+
+          build and activate (standalone Home Manager):
             build                  build the configuration without activating it
-            news [args]            show Home Manager news for the selected configuration
             switch [MARK] [args]   activate, marking the result if MARK is given
             update [MARK] [args]   git pull --ff-only, then switch
-            flake-update           update the flake inputs, commit them, switch
+            flake-update [args]    update the flake inputs, commit them, switch
+            diff-closures [ID|NAME] closure diff: next build, or ID/mark, vs the active generation
+            news [args]            show Home Manager news for the selected configuration
+
+          generations:
             generations            list generations with their marks and tags
+            rollback [ID|NAME]     back one generation, or to an id or a mark
             mark [-f] NAME [ID]    pin a generation under NAME (default: current)
             unmark NAME            drop the mark, unpinning the generation
-            rollback [ID|NAME]     back one generation, or to an id or a mark
-            diff [git diff args]   show core, then HM changes (git diff HEAD)
-            diff-closures [ID|NAME] diff closures against the active generation
-            <name> [args]          run the plugin hm-<name> from PATH (with HM_FLAKE, HM_PROFILE)
+          EOF
+            fi
+            cat <<EOF
+
+          plugins:
+            <name> [args]          run hm-<name> from PATH (with HM_FLAKE, HM_PROFILE)
 
           flake: $flake  (override with \$HM_FLAKE)
-          profile: $profile  (override with \$HM_PROFILE)
-          core: ''${core_flake:-public pin}  (local checkout via \$HM_CORE_FLAKE)
-          marks: $marks_dir  (override with \$HM_MARKS)
           EOF
+            if [[ $backend == nixos ]]; then
+              echo "host: $host  (nixosConfigurations)"
+            else
+              echo "profile: $profile  (override with \$HM_PROFILE)"
+            fi
+            echo "core: ''${core_flake:-public pin}  (local checkout via \$HM_CORE_FLAKE)"
+            if [[ $backend != nixos ]]; then
+              echo "marks: $marks_dir  (override with \$HM_MARKS)"
+            fi
+          }
+
+          # Standalone-only commands get one answer on NixOS instead of reaching
+          # the home-manager CLI, which would build a second, standalone HOME.
+          standalone_only() {
+            echo "hm $1: только для standalone Home Manager; здесь он часть NixOS $host." >&2
+            echo "Справка: hm --help" >&2
+            exit 1
+          }
+
+          # A mark names a standalone generation; system generations carry the
+          # hm/* tag in their boot label instead.
+          reject_mark() {
+            if [[ -n "''${1:-}" && "$1" != -* ]]; then
+              echo "hm $cmd: метки поколений только в standalone; подпись берётся из тега hm commit, '$1' не принят" >&2
+              exit 1
+            fi
           }
 
           if [[ ! -d "$flake" ]]; then
@@ -337,14 +488,42 @@ in
               fi
               ;;
             build)
+              if [[ $backend == nixos ]]; then
+                prepare_nixos
+                warn_untracked
+                exec nixos-rebuild build --flake "$flake#$host" "''${core_args[@]}" "$@"
+              fi
               prepare_build
+              warn_untracked
               home-manager build --flake "$build_flake#$profile" "''${core_args[@]}"
               ;;
             news)
+              [[ $backend == nixos ]] && standalone_only "$cmd"
               prepare_build "$@"
               home-manager news --flake "$build_flake#$profile" "''${core_args[@]}" "''${build_args[@]}"
               ;;
             switch)
+              if [[ $backend == nixos ]]; then
+                reject_mark "$@"
+                prepare_nixos
+                warn_untracked
+                label_args=()
+                if [[ -n $boot_label_enabled ]]; then
+                  label="$(boot_label)"
+                  if [[ -n $label ]]; then
+                    echo "hm: метка в меню загрузки: $label" >&2
+                    export HM_BOOT_LABEL="$label"
+                    label_args=(--impure)
+                  else
+                    unset HM_BOOT_LABEL
+                  fi
+                fi
+                # --sudo: built as the user (root would refuse a Git checkout it
+                # does not own), elevated only to activate.
+                exec nixos-rebuild switch --sudo --flake "$flake#$host" \
+                  "''${core_args[@]}" "''${label_args[@]}" "$@"
+              fi
+
               # A leading word that is not a flag is a mark for the generation
               # this switch produces. home-manager switch itself takes no
               # positional arguments -- its parser rejects them -- so there is
@@ -369,6 +548,7 @@ in
               # dotfiles. The timestamp keeps a second switch from colliding with
               # the backup left by the first.
               prepare_build "$@"
+              warn_untracked
               home-manager switch \
                 --flake "$build_flake#$profile" \
                 "''${core_args[@]}" \
@@ -382,10 +562,14 @@ in
               fi
               ;;
             update)
+              # Checked before the pull: a switch that will refuse the mark should
+              # not leave a moved checkout behind.
+              [[ $backend == nixos ]] && reject_mark "$@"
               git -C "$flake" pull --ff-only
               exec "$0" switch "$@"
               ;;
             flake-update)
+              [[ $backend == nixos ]] && reject_mark "$@"
               nix flake update --flake "$flake"
 
               # Committed here rather than left in the working tree, because a
@@ -410,6 +594,36 @@ in
               exec "$0" switch "$@"
               ;;
             generations)
+              if [[ $backend == nixos ]]; then
+                # nixos-rebuild's table shows system.nixos.version, not the boot
+                # label: the label is in <generation>/nixos-version, tags first,
+                # the version last. Any argument (--json, ...) gets the plain
+                # nixos-rebuild output.
+                if (( $# > 0 )); then
+                  exec nixos-rebuild list-generations "$@"
+                fi
+                {
+                  printf '%s\t' Generation Build-date "NixOS version" Kernel \
+                    "Configuration Revision" Specialisation Current
+                  printf '%s\n' "Метка"
+                  nixos-rebuild list-generations --json \
+                    | jq -r '.[] | [.generation, .date, .nixosVersion,
+                        .kernelVersion, .configurationRevision,
+                        (.specialisations | join(",") | if . == "" then "-" else . end),
+                        .current] | @tsv' \
+                    | while IFS=$'\t' read -r gen date version kernel revision spec current; do
+                        label="$(cat "$system_profile-$gen-link/nixos-version" 2> /dev/null || true)"
+                        label="''${label%-"$version"}"
+                        if [[ -z $label || $label == "$version" ]]; then
+                          label="-"
+                        fi
+                        printf '%s\t' "$gen" "$date" "$version" "$kernel" \
+                          "$revision" "$spec" "$current"
+                        printf '%s\n' "$label"
+                      done
+                } | column -t -s $'\t'
+                exit 0
+              fi
               dir="$(profile_dir)"
               current="$(current_id)"
 
@@ -475,6 +689,7 @@ in
               printf '%s\n' "''${rows[@]}" | sort -t$'\t' -k1,1nr | cut -f2-
               ;;
             mark)
+              [[ $backend == nixos ]] && standalone_only "$cmd"
               force=""
               if [[ "''${1:-}" == "-f" || "''${1:-}" == "--force" ]]; then
                 force="1"
@@ -525,6 +740,7 @@ in
               echo "mark: $name -> id $id ($(readlink -f "$link"))"
               ;;
             unmark)
+              [[ $backend == nixos ]] && standalone_only "$cmd"
               name="''${1:-}"
               if [[ -z $name ]]; then
                 echo "usage: hm unmark <метка>" >&2
@@ -539,6 +755,16 @@ in
               echo "unmark: $name (поколение больше не защищено от GC)"
               ;;
             rollback)
+              if [[ $backend == nixos ]]; then
+                if [[ -z "''${1:-}" ]]; then
+                  exec nixos-rebuild switch --rollback --sudo
+                fi
+                resolve_system_gen "$1" > /dev/null
+                # What nixos-rebuild --rollback does, for a chosen generation:
+                # move the profile, then activate and make it the boot default.
+                sudo "$(command -v nix-env)" --profile "$system_profile" --switch-generation "$1"
+                exec sudo "$system_profile/bin/switch-to-configuration" switch
+              fi
               if [[ -z "''${1:-}" ]]; then
                 # One step back, profile pointer and all.
                 home-manager rollback
@@ -568,6 +794,15 @@ in
               git -C "$flake" diff --color=auto HEAD "$@"
               ;;
             diff-closures)
+              if [[ $backend == nixos ]]; then
+                if [[ -z "''${1:-}" ]]; then
+                  prepare_nixos
+                  built="$(nix build --no-link --print-out-paths "''${core_args[@]}" \
+                    "$flake#nixosConfigurations.\"$host\".config.system.build.toplevel")"
+                  exec nix store diff-closures /run/current-system "$built"
+                fi
+                exec nix store diff-closures "$(resolve_system_gen "$1")" /run/current-system
+              fi
               current_profile="$(profile_dir)/home-manager"
 
               if [[ -z "''${1:-}" ]]; then
@@ -609,7 +844,7 @@ in
       hmflakeupdate = "hm flake-update";
     };
     programs.zsh.siteFunctions = lib.mkIf config.programs.zsh.enable {
-      _hm = builtins.readFile ./scripts/_hm;
+      _hm = builtins.replaceStrings [ "@backend@" ] [ cfg.backend ] (builtins.readFile ./scripts/_hm);
     };
   };
 }

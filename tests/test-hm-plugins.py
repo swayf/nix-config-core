@@ -17,6 +17,7 @@ class PluginTests(unittest.TestCase):
         expression = f'''let m = import {module} {{
           config.programs.hm = {{
             flakePath = "/default-checkout"; coreFlakePath = null; profile = "default-user";
+            backend = "standalone"; nixosHost = null; bootLabel = false;
           }};
           lib.escapeShellArg = s: "'" + s + "'";
           pkgs = {{ git = null; coreutils = null; writeShellApplication = args: args; }};

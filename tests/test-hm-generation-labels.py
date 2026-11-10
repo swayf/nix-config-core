@@ -18,6 +18,7 @@ class GenerationLabelTests(unittest.TestCase):
         expression = f'''let m = import {module} {{
           config.programs.hm = {{
             flakePath = "/unused"; coreFlakePath = null; profile = "fixture";
+            backend = "standalone"; nixosHost = null; bootLabel = false;
           }};
           lib.escapeShellArg = s: "'" + s + "'";
           pkgs = {{ git = null; coreutils = null; writeShellApplication = args: args; }};

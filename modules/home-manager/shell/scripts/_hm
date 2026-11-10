@@ -10,6 +10,9 @@
 # Neither helper runs `hm`, `nix` or `git` -- marks are a directory listing and
 # generations are the profile's symlinks, so completing costs two globs.
 
+# programs.hm.backend, substituted by ../hm.nix: standalone or nixos.
+_hm_backend='@backend@'
+
 # $HM_MARKS and its default are duplicated from ../hm.nix; they have to
 # agree, so change both together.
 _hm_marks_dir() {
@@ -64,23 +67,50 @@ _hm_generations() {
   (( $#gens )) && _describe -t generations 'поколение' gens
 }
 
+# backend nixos: system generations, the newest first.
+_hm_system_generations() {
+  local -a gens
+  local link id cur
+  cur=${${$(readlink /nix/var/nix/profiles/system 2>/dev/null)#system-}%-link}
+  for link in /nix/var/nix/profiles/system-*-link(NOn); do
+    id=${${link:t}#system-}
+    id=${id%-link}
+    if [[ $id == $cur ]]; then
+      gens+=("${id}:системное поколение (текущее)")
+    else
+      gens+=("${id}:системное поколение")
+    fi
+  done
+  (( $#gens )) && _describe -t generations 'поколение' gens
+}
+
 _hm() {
   local -a cmds=(
     'status:git add -A и показать рабочее дерево'
+    'diff:показать git-изменения относительно HEAD'
     'commit:закоммитить всё, сообщение становится и git-тегом'
     'push:отправить core, затем HM и аннотированные теги'
     'build:собрать конфигурацию без активации'
-    'news:показать новости Home Manager для выбранной конфигурации'
-    'switch:активировать, первый аргумент — метка'
     'update:git pull --ff-only и активировать конфигурацию'
     'flake-update:обновить входы флейка и переключиться'
-    'generations:поколения с метками и тегами'
-    'mark:пометить поколение и защитить его от GC'
-    'unmark:снять метку'
-    'rollback:вернуться на поколение или метку'
-    'diff:показать git-изменения относительно HEAD'
     'diff-closures:сравнить замыкания поколений'
   )
+  if [[ $_hm_backend == nixos ]]; then
+    cmds+=(
+      'switch:nixos-rebuild switch, метка загрузки из тега hm/*'
+      'generations:системные поколения с метками загрузки'
+      'rollback:вернуться на системное поколение'
+    )
+  else
+    cmds+=(
+      'switch:активировать, первый аргумент — метка'
+      'news:показать новости Home Manager для выбранной конфигурации'
+      'generations:поколения с метками и тегами'
+      'mark:пометить поколение и защитить его от GC'
+      'unmark:снять метку'
+      'rollback:вернуться на поколение или метку'
+    )
+  fi
 
   if (( CURRENT == 2 )); then
     # Plugins: every hm-<name> on PATH is offered as `hm <name>`.
@@ -90,6 +120,21 @@ _hm() {
     done
     _describe -t commands 'hm' cmds
     return
+  fi
+
+  # nixos: no marks; switch/update take nixos-rebuild flags from the start.
+  # commit falls through to the shared case below.
+  if [[ $_hm_backend == nixos ]]; then
+    case ${words[2]} in
+      rollback|diff-closures)
+        (( CURRENT == 3 )) && _hm_system_generations
+        return
+        ;;
+      switch|update|flake-update|build|generations)
+        _default
+        return
+        ;;
+    esac
   fi
 
   case ${words[2]} in
