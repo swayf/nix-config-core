@@ -36,7 +36,7 @@ with open(os.environ["TRACE"], "a") as f:
                         "label": os.environ.get("HM_BOOT_LABEL")}) + "\\n")
 if kind == "nixos-rebuild" and args[:2] == ["list-generations", "--json"]:
     print(json.dumps([{"generation": 2, "date": "2026-11-10 10:00:00",
-        "nixosVersion": "26.05", "kernelVersion": "6.12", "configurationRevision": "",
+        "nixosVersion": "26.05", "kernelVersion": "6.12",
         "specialisations": [], "current": True}]))
 if kind == "nix" and args[:1] == ["build"]:
     print("/fake/toplevel")
@@ -111,14 +111,25 @@ class NixosBackendTests(unittest.TestCase):
                 self.assertIn("только для standalone", result.stderr)
         self.assertEqual(self.events(), [])
 
-    def test_switch_on_tagged_clean_commit_passes_boot_label(self):
-        self.git(self.home, "tag", "-a", "hm/fixture-change", "-m", "x")
+    def test_switch_on_clean_commit_passes_subject_boot_label(self):
+        (self.home / "note").write_text("x\n")
+        self.git(self.home, "add", "note")
+        self.git(self.home, "commit", "--quiet", "-m", "Fixture: change, Подпись")
+        self.git(self.home, "tag", "-a", "hm/ignored", "-m", "x")
         result = self.run_hm("switch", "--show-trace")
         self.assertEqual(result.returncode, 0, result.stderr)
         [event] = self.events()
         self.assertEqual(event["args"][:4], ["switch", "--sudo", "--flake", f"{self.home}#fixture"])
         self.assertEqual(event["args"][4:], ["--impure", "--show-trace"])
         self.assertRegex(event["label"], r"^fixture-change-\d\d:\d\d$")
+
+    def test_commit_without_tag_flag_creates_no_tag(self):
+        (self.home / "note").write_text("x\n")
+        self.assertEqual(self.run_hm("commit", "Fixture change").returncode, 0)
+        self.assertEqual(self.git(self.home, "tag", "--list"), "")
+        result = self.run_hm("commit", "-n", "x")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("неизвестный флаг '-n'", result.stderr)
 
     def test_switch_on_dirty_tree_has_no_label(self):
         (self.home / "flake.nix").write_text("{ outputs = _: { dirty = 1; }; }\n")
@@ -148,7 +159,7 @@ class NixosBackendTests(unittest.TestCase):
         self.assertIn("new.nix", result.stderr)
 
     def test_mark_is_refused_before_pull_or_build(self):
-        for cmd in ("switch", "update", "flake-update"):
+        for cmd in ("switch", "pull", "update"):
             with self.subTest(cmd=cmd):
                 result = self.run_hm(cmd, "stable")
                 self.assertEqual(result.returncode, 1)
@@ -178,6 +189,8 @@ class NixosBackendTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         header, row = result.stdout.splitlines()
         self.assertTrue(header.startswith("Generation") and header.endswith("Метка"))
+        self.assertNotIn("Revision", header)
+        self.assertEqual(len(row.split()), 8)
         self.assertTrue(row.startswith("2 ") and row.endswith("-"))
         self.run_hm("generations", "--json")
         self.assertEqual(self.events()[-1]["args"], ["list-generations", "--json"])

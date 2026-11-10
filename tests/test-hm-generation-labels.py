@@ -204,20 +204,53 @@ if kind == "nix":
         self.assertFalse(self.trace.exists())
         self.assertEqual(list(self.locks.iterdir()), [])
 
-    def test_commit_tag_is_shown_for_the_resulting_generation(self):
-        (self.home / "note").write_text("tagged change\n")
-        self.run_hm("commit", "Label restored")
-        rev = self.git(self.home, "rev-parse", "--short", "HEAD")
+    def generation_row(self):
         self.run_hm("switch")
         probe = next(e["probe"] for e in self.events() if "probe" in e)
-        self.assertEqual(probe["label"], rev)
+        self.assertEqual(probe["label"], self.git(self.home, "rev-parse", "--short", "HEAD"))
         generation = self.root / ("test-home-manager-generation-" + probe["label"])
         generation.mkdir()
         profiles = self.root / "state/nix/profiles"
         profiles.mkdir(parents=True)
         (profiles / "home-manager-1-link").symlink_to(generation)
         (profiles / "home-manager").symlink_to("home-manager-1-link")
-        self.assertIn("#hm/label-restored", self.run_hm("generations").stdout)
+        return self.run_hm("generations").stdout.splitlines()[1]
+
+    def test_commit_subject_captions_generation_without_tag(self):
+        (self.home / "note").write_text("captioned change\n")
+        self.run_hm("commit", "Подпись restored")
+        self.assertEqual(self.git(self.home, "tag", "--list"), "")
+        self.assertTrue(self.generation_row().endswith(" Подпись restored"))
+
+    def test_explicit_tag_is_shown_with_subject(self):
+        (self.home / "note").write_text("tagged change\n")
+        self.run_hm("commit", "-t", "stable", "Tagged change")
+        self.assertEqual(self.git(self.home, "tag", "--list"), "hm/stable")
+        self.assertTrue(self.generation_row().endswith(" #hm/stable Tagged change"))
+
+    def test_status_leaves_index_and_warns_about_untracked(self):
+        (self.home / "note").write_text("changed\n")
+        (self.home / "new").write_text("untracked\n")
+        (self.core / "new").write_text("untracked\n")
+        indexes = [self.home / ".git/index", self.core / ".git/index"]
+        before = [path.read_bytes() for path in indexes]
+        result = self.run_hm("status")
+        self.assertEqual(before, [path.read_bytes() for path in indexes])
+        self.assertEqual(result.stderr.count("untracked-файлы"), 2)
+        self.assertIn("hm add", result.stderr)
+        self.run_hm("add")
+        for repo in (self.home, self.core):
+            self.assertIn("A  new", self.git(repo, "status", "--short"))
+
+    def test_old_command_names_are_unknown(self):
+        for cmd in ("flake-update",):
+            result = self.run_hm(cmd, check=False)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(f"неизвестная команда '{cmd}'", result.stderr)
+        help_text = self.run_hm("--help").stdout
+        self.assertNotIn("flake-update", help_text)
+        self.assertIn("  pull [MARK] [args]", help_text)
+        self.assertIn("  update [MARK] [args]", help_text)
 
 
 if __name__ == "__main__":

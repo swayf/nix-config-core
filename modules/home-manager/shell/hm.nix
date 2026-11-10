@@ -49,9 +49,9 @@ in
       type = lib.types.bool;
       default = false;
       description = ''
-        backend nixos: hm switch passes the newest hm/* tag and the commit time
-        of a clean checkout in HM_BOOT_LABEL and evaluates with --impure. The
-        NixOS configuration decides how to use the variable.
+        backend nixos: hm switch passes the commit subject (as an ASCII slug)
+        and the commit time of a clean checkout in HM_BOOT_LABEL and evaluates
+        with --impure. The NixOS configuration decides how to use the variable.
       '';
     };
   };
@@ -159,20 +159,19 @@ in
             for repo in "$flake" ''${core_flake:+"$core_flake"}; do
               mapfile -t untracked < <(git -C "$repo" ls-files --others --exclude-standard 2> /dev/null || true)
               if (( ''${#untracked[@]} > 0 )); then
-                echo "hm: в $repo есть untracked-файлы, в сборку они не попадут (hm status добавит):" >&2
+                echo "hm: в $repo есть untracked-файлы, в сборку они не попадут (hm add добавит):" >&2
                 printf '  %s\n' "''${untracked[@]}" >&2
               fi
             done
           }
 
-          # The newest hm/* tag (from `hm commit`; within one second the highest
-          # -N of hm commit's numbering) on HEAD, without the prefix, and the
-          # commit time HH:MM, for the boot menu. The commit time, not the
-          # switch time: a repeated switch of one commit builds the same system,
-          # not a new generation. A label allows no spaces. Nothing when a tree
-          # is dirty: the build is then not that commit.
+          # The HEAD commit subject as a slug and the commit time HH:MM, for the
+          # boot menu. The commit time, not the switch time: a repeated switch
+          # of one commit builds the same system, not a new generation. A NixOS
+          # label allows only [a-zA-Z0-9:_.-]. Nothing when a tree is dirty: the
+          # build is then not that commit.
           boot_label() {
-            local tags tag stamp
+            local slug stamp
             if [[ -n "$(git -C "$flake" status --porcelain --untracked-files=no)" ]]; then
               return 0
             fi
@@ -180,18 +179,12 @@ in
               return 0
             fi
             stamp="$(git -C "$flake" log -1 --format=%cd --date=format-local:%H:%M)"
-            mapfile -t tags < <(git -C "$flake" tag --points-at HEAD --list 'hm/*' --sort=-version:refname --sort=-creatordate)
-            if (( ''${#tags[@]} == 0 )); then
+            slug="$(subject_slug "$(git -C "$flake" log -1 --format=%s)")"
+            if [[ -z $slug ]]; then
               printf '%s' "$stamp"
               return 0
             fi
-            tag="''${tags[0]#hm/}"
-            if [[ ! $tag =~ ^[a-zA-Z0-9:_.-]+$ ]]; then
-              echo "hm: тег ''${tags[0]} не годится в метку меню загрузки, только время" >&2
-              printf '%s' "$stamp"
-              return 0
-            fi
-            printf '%s' "$tag-$stamp"
+            printf '%s' "$slug-$stamp"
           }
 
           # A system generation's store path from its numeric id.
@@ -214,9 +207,10 @@ in
           usage: hm <command> [args]
 
           git:
-            status                 stage/show core, then HM (git add -A)
+            status                 show core, then HM (git status, index unchanged)
+            add                    stage core, then HM (git add -A)
             diff [git diff args]   show core, then HM changes (git diff HEAD)
-            commit [-t TAG] [msg]  commit core, then HM with the same message; tag HM (-n: none)
+            commit [-t TAG] [msg]  stage and commit core, then HM with the same message; -t tags HM
             push                   push core, then HM, including annotated tags (--follow-tags)
           EOF
             if [[ $backend == nixos ]]; then
@@ -224,9 +218,9 @@ in
 
           build and activate (NixOS $host, Home Manager inside the system):
             build [args]           nixos-rebuild build
-            switch [args]          nixos-rebuild switch (boot label from the hm/* tag)
-            update [args]          git pull --ff-only, then switch
-            flake-update [args]    update the flake inputs, commit them, switch
+            switch [args]          nixos-rebuild switch (boot label from the commit subject)
+            pull [args]            git pull --ff-only, then switch
+            update [args]          update the flake inputs, commit them, switch
             diff-closures [ID]     closure diff: next build, or generation ID, vs the running system
 
           generations:
@@ -239,13 +233,13 @@ in
           build and activate (standalone Home Manager):
             build                  build the configuration without activating it
             switch [MARK] [args]   activate, marking the result if MARK is given
-            update [MARK] [args]   git pull --ff-only, then switch
-            flake-update [args]    update the flake inputs, commit them, switch
+            pull [MARK] [args]     git pull --ff-only, then switch
+            update [MARK] [args]   update the flake inputs, commit them, switch
             diff-closures [ID|NAME] closure diff: next build, or ID/mark, vs the active generation
             news [args]            show Home Manager news for the selected configuration
 
           generations:
-            generations            list generations with their marks and tags
+            generations            list generations with marks, tags and commit subject
             rollback [ID|NAME]     back one generation, or to an id or a mark
             mark [-f] NAME [ID]    pin a generation under NAME (default: current)
             unmark NAME            drop the mark, unpinning the generation
@@ -278,10 +272,10 @@ in
           }
 
           # A mark names a standalone generation; system generations carry the
-          # hm/* tag in their boot label instead.
+          # commit subject in their boot label instead.
           reject_mark() {
             if [[ -n "''${1:-}" && "$1" != -* ]]; then
-              echo "hm $cmd: метки поколений только в standalone; подпись берётся из тега hm commit, '$1' не принят" >&2
+              echo "hm $cmd: метки поколений только в standalone; подпись берётся из темы коммита, '$1' не принят" >&2
               exit 1
             fi
           }
@@ -311,18 +305,15 @@ in
             echo "''${link%-link}"
           }
 
-          # The tag name a commit message boils down to. ASCII by design: git
-          # takes UTF-8 refnames, but tr works on bytes, so a Cyrillic message
-          # would come back one dash per byte -- dropping the non-ASCII words and
-          # keeping the rest is the readable half of that trade. Dots go too,
-          # which is what makes the ".." / leading-dot / trailing-".lock" refname
-          # rules impossible to trip rather than something to check for.
-          tag_slug() {
+          # The boot-label part a commit subject boils down to. ASCII by design:
+          # tr works on bytes, so a Cyrillic subject would come back one dash per
+          # byte -- dropping the non-ASCII words and keeping the rest is the
+          # readable half of that trade.
+          subject_slug() {
             local s
             s="$(printf '%s' "''${1,,}" | tr -c 'a-z0-9_-' '-' | tr -s '-')"
 
-            # Cut on a word boundary. A refname has no length limit, but this one
-            # is read in the label column of `hm generations`, next to the marks.
+            # Cut on a word boundary: the label is read in the boot menu.
             if (( ''${#s} > 50 )); then
               s="''${s:0:50}"
               s="''${s%-*}"
@@ -354,20 +345,32 @@ in
 
           case "$cmd" in
             status)
+              # Read-only: --no-optional-locks keeps git from rewriting the index
+              # stat cache, untracked files are only reported. Staging is hm add.
               git -C "$flake" rev-parse --git-dir > /dev/null
               prepare_core
               if [[ -n $core_flake ]]; then
                 echo "=== core: $core_flake ==="
-                git -C "$core_flake" add -A
-                git -C "$core_flake" status
+                git --no-optional-locks -C "$core_flake" status
                 echo "=== home-manager: $flake ==="
               fi
+              git --no-optional-locks -C "$flake" status
+              warn_untracked
+              ;;
+            add)
+              if (( $# > 0 )); then
+                echo "usage: hm add (git add -A в core, затем в HM)" >&2
+                exit 1
+              fi
+              git -C "$flake" rev-parse --git-dir > /dev/null
+              prepare_core
+              if [[ -n $core_flake ]]; then
+                git -C "$core_flake" add -A
+              fi
               git -C "$flake" add -A
-              git -C "$flake" status
               ;;
             commit)
               tag=""
-              no_tag=""
               while [[ "''${1:-}" == -* ]]; do
                 case "$1" in
                   -t | --tag)
@@ -377,10 +380,6 @@ in
                     tag="hm/''${2:?hm commit: -t требует имя тега}"
                     shift 2
                     ;;
-                  -n | --no-tag)
-                    no_tag="1"
-                    shift
-                    ;;
                   *)
                     echo "hm commit: неизвестный флаг '$1'" >&2
                     exit 1
@@ -388,19 +387,12 @@ in
                 esac
               done
 
-              # A name given by hand and already taken is an error; the derived
-              # name below is not held to that, see there.
+              # A tag only on request; an already taken name is an error.
               if [[ -n $tag ]] && git -C "$flake" rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
                 echo "hm: тег $tag уже занят ($(git -C "$flake" rev-parse --short "$tag"))" >&2
                 exit 1
               fi
 
-              # Whether a message was given decides the automatic tag, and $* is
-              # about to lose that distinction to its default.
-              msg_given=""
-              if (( $# > 0 )); then
-                msg_given="1"
-              fi
               msg="''${*:-Обновление конфигурации Home Manager}"
 
               # Preflight both repositories before staging either. Separate Git
@@ -418,42 +410,18 @@ in
               fi
 
               git -C "$flake" add -A
-              committed=""
               if git -C "$flake" diff --cached --quiet; then
                 echo "Нет изменений для коммита"
               else
                 git -C "$flake" status --short
                 if git -C "$flake" commit -m "$msg"; then
-                  committed="1"
+                  :
                 else
                   result=$?
                   if [[ -n $core_flake ]]; then
                     echo "hm: commit home-manager не выполнен; core мог быть уже сохранён. Исправьте ошибку и повторите hm commit." >&2
                   fi
                   exit "$result"
-                fi
-              fi
-
-              # The message is the tag name by default; -t only overrides it and
-              # -n turns it off. Two cases stay untagged: a commit with no message
-              # of its own, where the fallback text names nothing, and a run that
-              # committed nothing, where the tag would land on a commit that is
-              # not the one the message describes. Explicit -t keeps tagging HEAD
-              # in that second case -- see below.
-              if [[ -z $tag && -z $no_tag && -n $msg_given && -n $committed ]]; then
-                slug="$(tag_slug "$msg")"
-                if [[ -z $slug ]]; then
-                  echo "hm: из сообщения не собралось имя тега — тег не поставлен" >&2
-                else
-                  # Repeated messages are normal ("minor"), and a name nobody
-                  # asked for is no reason to fail: the collision is numbered
-                  # instead, hm/minor, hm/minor-2, hm/minor-3.
-                  tag="hm/$slug"
-                  n=2
-                  while git -C "$flake" rev-parse -q --verify "refs/tags/$tag" > /dev/null; do
-                    tag="hm/$slug-$n"
-                    n=$(( n + 1 ))
-                  done
                 fi
               fi
 
@@ -561,14 +529,14 @@ in
                 "$0" mark "$mark"
               fi
               ;;
-            update)
+            pull)
               # Checked before the pull: a switch that will refuse the mark should
               # not leave a moved checkout behind.
               [[ $backend == nixos ]] && reject_mark "$@"
               git -C "$flake" pull --ff-only
               exec "$0" switch "$@"
               ;;
-            flake-update)
+            update)
               [[ $backend == nixos ]] && reject_mark "$@"
               nix flake update --flake "$flake"
 
@@ -576,17 +544,10 @@ in
               # switch on a dirty tree produces a generation named
               # <rev>-dirty (see flake.nix) that belongs to no commit -- and
               # updated inputs are exactly what one wants to roll back later.
+              # The subject labels the generation in hm generations and the boot menu.
               git -C "$flake" add flake.lock
               if ! git -C "$flake" diff --cached --quiet -- flake.lock; then
                 git -C "$flake" commit -m "flake.lock: update inputs"
-
-                # Tagged so `hm generations` shows when the inputs moved, e.g.
-                # #hm/updated-2026-09-16-14-30. Only on a real commit: with
-                # nothing new the tag would date a commit that is not an update.
-                stamp="updated $(date '+%Y-%m-%d %H:%M')"
-                tag="hm/$(tag_slug "$stamp")"
-                git -C "$flake" tag -a "$tag" -m "$stamp"
-                echo "tag: $tag -> $(git -C "$flake" rev-parse --short HEAD)"
               fi
 
               # "$0", not `hm`: this must reach the switch even when the profile
@@ -604,21 +565,20 @@ in
                 fi
                 {
                   printf '%s\t' Generation Build-date "NixOS version" Kernel \
-                    "Configuration Revision" Specialisation Current
+                    Specialisation Current
                   printf '%s\n' "Метка"
                   nixos-rebuild list-generations --json \
-                    | jq -r '.[] | [.generation, .date, .nixosVersion,
-                        .kernelVersion, .configurationRevision,
+                    | jq -r '.[] | [.generation, .date, .nixosVersion, .kernelVersion,
                         (.specialisations | join(",") | if . == "" then "-" else . end),
                         .current] | @tsv' \
-                    | while IFS=$'\t' read -r gen date version kernel revision spec current; do
+                    | while IFS=$'\t' read -r gen date version kernel spec current; do
                         label="$(cat "$system_profile-$gen-link/nixos-version" 2> /dev/null || true)"
                         label="''${label%-"$version"}"
                         if [[ -z $label || $label == "$version" ]]; then
                           label="-"
                         fi
                         printf '%s\t' "$gen" "$date" "$version" "$kernel" \
-                          "$revision" "$spec" "$current"
+                          "$spec" "$current"
                         printf '%s\n' "$label"
                       done
                 } | column -t -s $'\t'
@@ -650,11 +610,15 @@ in
                 rev="''${rev#*-home-manager-generation}"
                 rev="''${rev#-}"
 
+                # The commit subject is the generation's caption. A -dirty or
+                # unknown rev names no commit, so it gets none.
                 labels="''${marks_of[$target]:-}"
                 if [[ -n $rev ]]; then
                   while read -r tag; do
                     [[ -n $tag ]] && labels+=" #$tag"
                   done < <(git -C "$flake" tag --points-at "$rev" --list 'hm/*' 2> /dev/null || true)
+                  subject="$(git -C "$flake" log -1 --format=%s "$rev^{commit}" -- 2> /dev/null || true)"
+                  [[ -n $subject ]] && labels+=" $subject"
                 fi
 
                 marker=" "
@@ -685,7 +649,7 @@ in
               # Written out instead of built with %-16s: bash pads by bytes, and
               # a Cyrillic heading is two bytes per character, so every directive
               # here would leave the column short by its own length.
-              echo "    id  дата              rev          метки"
+              echo "    id  дата              rev          метки и тема"
               printf '%s\n' "''${rows[@]}" | sort -t$'\t' -k1,1nr | cut -f2-
               ;;
             mark)
@@ -836,13 +800,6 @@ in
       })
     ];
 
-    home.shellAliases = {
-      hmstatus = "hm status";
-      hmcommit = "hm commit";
-      hmbuild = "hm build";
-      hmswitch = "hm switch";
-      hmflakeupdate = "hm flake-update";
-    };
     programs.zsh.siteFunctions = lib.mkIf config.programs.zsh.enable {
       _hm = builtins.replaceStrings [ "@backend@" ] [ cfg.backend ] (builtins.readFile ./scripts/_hm);
     };
