@@ -248,6 +248,9 @@ run synthetic HOME/clipboard/focus contracts. Native direct tests passed locally
 selected caller-package builds and image/runtime acceptance remain unverified
 when their build closure is unavailable. A synthetic test or fixed-output reuse
 is not evidence of redistribution rights for fonts/MAX/extensions.
+MAX integration tests in `modules/home-manager/desktop/max/` are opt-in:
+`test_clipboard_x11.py` needs Xvfb, xclip and python-xlib; `test_notifications.py`
+needs dbus-daemon, xdg-dbus-proxy and dbus-next. Tests that need these tools skip without them.
 
 ## Runtime module API
 
@@ -490,6 +493,15 @@ in `/etc/brave/policies/managed/gcnt.json` and
 no host policies or profile data are rewritten. Mandatory policies can override
 per-profile preferences and disable the corresponding UI settings. Fingerprinting
 protection is browser-specific; blocking third-party cookies is not Firefox RFP.
+
+GUI tests live in `modules/home-manager/gui-container/`. `test-launcher.py`,
+`test-session.py` and `test-windows-shortcuts.py` are offline. `profiles-test.nix`
+builds `profiles` and `session` with mock browsers. `network-test.nix` builds
+gateway/workload fixtures from the caller's `pkgs` for `test-network.py --strict`
+(real rootless Podman and `/dev/net/tun`). `test-gui.py IMAGE GATEWAY WESTON
+[--profiles]` is a host-only headless Weston smoke test of the real launcher; with
+`--profiles` pass `profiles-test.nix`'s `image` built from the caller's `pkgs`.
+These runtime tests are not part of `checks`.
 
 `homeManagerModules.wsl-gui-device` is a separate bounded integrated profile,
 not the existing full WSL profile. Pass the caller's `sopsModule` and
