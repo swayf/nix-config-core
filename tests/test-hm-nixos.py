@@ -40,6 +40,8 @@ if kind == "nixos-rebuild" and args[:2] == ["list-generations", "--json"]:
         "specialisations": [], "current": True}]))
 if kind == "nix" and args[:1] == ["build"]:
     print("/fake/toplevel")
+if kind == "sudo" and os.environ.get("SUDO_FAIL"):
+    sys.exit(1)
 '''
 
 
@@ -118,7 +120,9 @@ class NixosBackendTests(unittest.TestCase):
         self.git(self.home, "tag", "-a", "hm/ignored", "-m", "x")
         result = self.run_hm("switch", "--show-trace")
         self.assertEqual(result.returncode, 0, result.stderr)
-        [event] = self.events()
+        [sudo, event] = self.events()
+        self.assertEqual((sudo["kind"], sudo["args"]), ("sudo", ["-v"]))
+        self.assertEqual(event["kind"], "nixos-rebuild")
         self.assertEqual(event["args"][:4], ["switch", "--sudo", "--flake", f"{self.home}#fixture"])
         self.assertEqual(event["args"][4:], ["--impure", "--show-trace"])
         self.assertRegex(event["label"], r"^fixture-change-\d\d:\d\d$")
@@ -134,16 +138,25 @@ class NixosBackendTests(unittest.TestCase):
     def test_switch_on_dirty_tree_has_no_label(self):
         (self.home / "flake.nix").write_text("{ outputs = _: { dirty = 1; }; }\n")
         self.assertEqual(self.run_hm("switch").returncode, 0)
-        [event] = self.events()
+        [sudo, event] = self.events()
+        self.assertEqual((sudo["kind"], sudo["args"]), ("sudo", ["-v"]))
+        self.assertEqual(event["kind"], "nixos-rebuild")
         self.assertNotIn("--impure", event["args"])
         self.assertIsNone(event["label"])
 
     def test_switch_without_boot_label_option_stays_pure(self):
         self.use_script(False)
         self.assertEqual(self.run_hm("switch").returncode, 0)
-        [event] = self.events()
+        [sudo, event] = self.events()
+        self.assertEqual((sudo["kind"], sudo["args"]), ("sudo", ["-v"]))
+        self.assertEqual(event["kind"], "nixos-rebuild")
         self.assertNotIn("--impure", event["args"])
         self.assertIsNone(event["label"])
+
+    def test_failed_password_stops_switch_before_build(self):
+        self.env["SUDO_FAIL"] = "1"
+        self.assertEqual(self.run_hm("switch").returncode, 1)
+        self.assertEqual([e["kind"] for e in self.events()], ["sudo"])
 
     def test_local_core_overrides_root_input(self):
         self.env["HM_CORE_FLAKE"] = str(self.core)

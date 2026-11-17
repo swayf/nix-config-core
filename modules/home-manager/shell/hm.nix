@@ -486,6 +486,10 @@ in
                     unset HM_BOOT_LABEL
                   fi
                 fi
+                # Ask for the password now, while the user is at the terminal,
+                # not after the build. The sudo cache covers activation when
+                # the build is shorter than its timestamp_timeout.
+                sudo -v
                 # --sudo: built as the user (root would refuse a Git checkout it
                 # does not own), elevated only to activate.
                 exec nixos-rebuild switch --sudo --flake "$flake#$host" \
