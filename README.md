@@ -731,6 +731,7 @@ Test it with `python3 modules/home-manager/agents-container/test-open.py`;
 fixtures use real loopback/stdio but fake Podman and desktop launchers.
 
 Opt in to host browser links with `services.agents-container.webLinks.enable = true`.
+`webLinks.opener` selects the host command that receives the URL (default `xdg-open`).
 The image then supplies an `xdg-open` shim; the launcher starts the host user
 service `agents-web-links` and mounts only its private socket directory read-only
 at `/run/agents-web-links`. Herdr's ordinary Ctrl-click and mouse capture remain

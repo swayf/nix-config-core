@@ -114,6 +114,12 @@ let
       && !lib.hasInfix (builtins.unsafeDiscardStringContext "${pkgs.systemd}/bin/systemd-run") command
       && lib.hasInfix "/bin/xdg-open" command
       && !(unit ? Install);
+    webLinkOpener = let
+      custom = make "/srv/alice" (settings // { webLinks = { enable = true; opener = "/run/fixture/open"; }; });
+      command = lib.concatStringsSep " " custom.config.systemd.user.services.agents-web-links.Service.ExecStart;
+    in lib.last (lib.splitString " " command) == "/run/fixture/open"
+      && custom.config.services.agents-container.runtimeSpec
+        == (make "/srv/alice" (settings // { webLinks.enable = true; })).config.services.agents-container.runtimeSpec;
     webLinkToggleChangesSpec = minimal.config.services.agents-container.runtimeSpec
       != (make "/srv/alice" (settings // { webLinks.enable = true; })).config.services.agents-container.runtimeSpec;
     hostSoundMapEmpty = alternate.config.services.agents-container.sound.events == {};

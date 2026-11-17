@@ -244,6 +244,12 @@ in
       process can open the host user's default browser; local files, other URI
       schemes and embedded credentials are refused. Limited to one request per
       second and twenty per minute. Disabled by default on headless callers'';
+    webLinks.opener = lib.mkOption {
+      type = lib.types.str;
+      default = "${pkgs.xdg-utils}/bin/xdg-open";
+      defaultText = lib.literalExpression ''"''${pkgs.xdg-utils}/bin/xdg-open"'';
+      description = "Host command run with one validated HTTP(S) URL as its only argument.";
+    };
     sound = {
       enable = lib.mkEnableOption "a playback-only host sound broker (no microphone/audio socket in the container)";
       events = lib.mkOption {
@@ -378,7 +384,7 @@ in
           "${./agents-container/web-links.py}" "serve"
           "%t/${cfg.commandName}-web-links/socket"
           "${webLinkRunner}/bin/systemd-run"
-          "${pkgs.xdg-utils}/bin/xdg-open"
+          cfg.webLinks.opener
         ];
         RuntimeDirectory = "${cfg.commandName}-web-links";
         RuntimeDirectoryMode = "0700";
