@@ -6,8 +6,15 @@ extension:
 let
   id = "${extension.vscodeExtPublisher}.${extension.vscodeExtName}";
   engine = extension.passthru.engineVersion or null;
-  triplet = "(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)";
-  editor = builtins.match triplet vscodeVersion;
+  number = "(0|[1-9][0-9]*)";
+  triplet = "${number}\\.${number}\\.${number}";
+  # nixpkgs may publish a two-part version ("1.146"); VS Code reports it as 1.146.0.
+  editorVersion =
+    if builtins.match "${number}\\.${number}" vscodeVersion != null then
+      "${vscodeVersion}.0"
+    else
+      vscodeVersion;
+  editor = builtins.match triplet editorVersion;
   caret = builtins.isString engine && lib.hasPrefix "^" engine;
   minimum = if caret then lib.removePrefix "^" engine else engine;
   required = if builtins.isString minimum then builtins.match triplet minimum else null;
@@ -24,9 +31,9 @@ let
     );
   compatible =
     if caret then
-      sameCompatibleSeries && lib.versionAtLeast vscodeVersion minimum
+      sameCompatibleSeries && lib.versionAtLeast editorVersion minimum
     else
-      vscodeVersion == minimum;
+      editorVersion == minimum;
   requirement = if builtins.isString engine then "'${engine}'" else "<missing or non-string>";
 in
 if editor == null then
