@@ -1680,6 +1680,17 @@ def direct_destination(machine, explicit=None):
     raise Error("Default direct diagnostics are routed through WARP; supply an unrouted --direct-test-url returning plain IPv4")
 
 
+# Separate WARP sessions may get different Cloudflare exits inside one block.
+WARP_EXIT_PREFIX = {4: 16, 6: 48}
+
+
+def same_exit_network(routed, confirmed):
+    routed, confirmed = ipaddress.ip_address(routed), ipaddress.ip_address(confirmed)
+    if routed.version != confirmed.version:
+        return False
+    return confirmed in ipaddress.ip_network(f"{routed}/{WARP_EXIT_PREFIX[routed.version]}", strict=False)
+
+
 def tunnel_test(repo, name, machine, credentials, c, direct_url=None):
     values = payloads(repo, name, credentials)
     material = json.loads(values[0]["material"])
@@ -1724,8 +1735,8 @@ def tunnel_test(repo, name, machine, credentials, c, direct_url=None):
                 raise Error("Cloudflare did not confirm isolated WARP")
             routed = curl_proxy(port, "https://ipinfo.io/ip").decode().strip()
             ipaddress.ip_address(routed)
-            if routed == c["address"] or routed != isolated["ip"]:
-                raise Error("Domain route did not match the confirmed WARP exit (or exit changed); investigate, not accepted")
+            if routed == c["address"] or not same_exit_network(routed, isolated["ip"]):
+                raise Error("Domain route did not match the confirmed WARP exit network; investigate, not accepted")
         finally:
             if process.poll() is None:
                 process.terminate()

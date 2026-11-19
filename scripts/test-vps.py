@@ -594,6 +594,15 @@ class ProfileTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 P.command("ip", "-j", "link")
 
+    def test_warp_exit_compares_network_not_address(self):
+        self.assertTrue(V.same_exit_network("104.28.223.45", "104.28.255.45"))
+        self.assertTrue(V.same_exit_network("104.28.223.45", "104.28.223.45"))
+        self.assertFalse(V.same_exit_network("104.29.0.1", "104.28.255.45"))
+        self.assertFalse(V.same_exit_network("212.24.104.198", "104.28.255.45"))
+        self.assertTrue(V.same_exit_network("2a09:bac1::1", "2a09:bac1::ffff"))
+        self.assertFalse(V.same_exit_network("2a09:bac2::1", "2a09:bac1::1"))
+        self.assertFalse(V.same_exit_network("104.28.0.1", "2a09:bac1::1"))
+
     def test_direct_probe_respects_warp_selection(self):
         self.assertEqual(V.direct_destination({"warpDomains": ["ipinfo.io"]})[1], "trace")
         url, mode = V.direct_destination({"warpDomains": ["ipinfo.io", "cloudflare.com"]})
