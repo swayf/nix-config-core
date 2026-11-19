@@ -157,6 +157,8 @@
         };
       # Tool-owned source for explicit source/fixture use; never load code from --repo.
       lib.vpsCliSource = ./scripts;
+      # Importable renderer source for callers that load it as a Python module.
+      lib.xrayRenderSource = ./modules/nixos/xray-render.py;
       lib.mkVpsCliChecks = import ./tests/vps-cli.nix;
       lib.mkDesktopShellTools = import ./modules/home-manager/shell/tools.nix;
       lib.mkDesktopChecks = import ./tests/desktop.nix;
@@ -254,6 +256,7 @@
       packages.${system} = {
         xray-render = renderer;
         xray-exporter = exporter;
+        vps-installer-tools = pkgs.callPackage ./modules/nixos/vps-installer-tools.nix { };
       };
 
       checks.${system} = {

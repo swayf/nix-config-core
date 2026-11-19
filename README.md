@@ -150,6 +150,9 @@ An unbound CLI explicitly unsets ambient `VPS_CLIENT_PROVIDERS` and
 `VPS_MIHOMO_BINARY`.
 
 `lib.vpsCliSource` exposes tool-owned scripts for explicit source/fixture use.
+`lib.xrayRenderSource` is the renderer file for callers that import it as a
+Python module. `packages.x86_64-linux.vps-installer-tools` is the installer closure
+the package binds; a source run builds it from the caller flake otherwise.
 Source execution requires `VPS_CLI_POLICY`, `VPS_CORE_REV` and `VPS_CORE_NAR_HASH`;
 `VPS_XRAY_RENDERER` may select an absolute tool-owned renderer. The package binds
 all four values.
