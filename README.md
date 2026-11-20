@@ -682,6 +682,10 @@ packages; environment; etcFiles; homeInit; }` and `proxy.{port,httpProxy}`.
 There is no implicit software import, SOPS selection, Mihomo enablement or
 personal resource default. `proxy.listen` must be loopback; `directPort` defaults
 to null and enables only explicit proxy opt-in, never a TUN fallback.
+`proxy.extraEgress.<name> = { port; label; }` opens further explicit listeners
+the same way, sets `AGENTS_EGRESS_<NAME>=socks5h://10.0.2.2:<port>` in the image
+and adds `<commandName> egress` (label, port, variable). Empty, the default,
+leaves the launcher, images and runtimeSpec byte-identical.
 `proxy.service` optionally supplies a host unit dependency.
 
 KVM, GPU devices, clipboard, sound, host web links and Nix token sharing are disabled by default.

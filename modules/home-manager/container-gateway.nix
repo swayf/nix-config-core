@@ -3,6 +3,8 @@
   lib,
   port,
   directPort ? null,
+  # Further explicit proxy listeners on 10.0.2.2. Empty keeps the render unchanged.
+  extraPorts ? [ ],
   name ? "localhost/container-egress-gateway",
   tunDevice ? "tun0",
 }:
@@ -17,6 +19,11 @@ let
         --replace-fail 'if bindAddr.IP.IsUnspecified()' 'if true'
     '';
   });
+  # Appended to an existing line, so an empty list adds no bytes.
+  extraRules = lib.concatMapStrings (extra: ''
+    ip daddr 10.0.2.2 tcp dport ${toString extra} accept
+    ip daddr 10.0.2.2 udp dport ${toString extra} accept
+  '') extraPorts;
   firewall = pkgs.writeText "agents-egress.nft" ''
     table inet agents_egress {
       chain output {
@@ -29,7 +36,7 @@ let
           # Explicit proxy clients may opt into host DIRECT; never a TUN fallback.
           ip daddr 10.0.2.2 tcp dport ${toString directPort} accept
           ip daddr 10.0.2.2 udp dport ${toString directPort} accept
-        ''}
+        ''}${extraRules}
       }
       chain forward {
         type filter hook forward priority 0; policy drop;

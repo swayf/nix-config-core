@@ -19,6 +19,26 @@ let
     path == null || (lib.hasPrefix "/" path && (let
       normalized = normalizeAbsolutePath path;
     in normalized != "/nix/store" && !lib.hasPrefix "/nix/store/" normalized));
+  # Extra explicit proxy listeners. Each one opens its port in the gateway
+  # firewall and is advertised to the workspace as AGENTS_EGRESS_<NAME>. An
+  # empty set leaves every render, image and hash unchanged.
+  extraEgress = cfg.proxy.extraEgress;
+  egressVariable = name: "AGENTS_EGRESS_${lib.toUpper name}";
+  egressEnvironment = lib.mapAttrs' (name: egress:
+    lib.nameValuePair (egressVariable name) "socks5h://10.0.2.2:${toString egress.port}"
+  ) extraEgress;
+  egressPorts = lib.mapAttrsToList (_: egress: egress.port) extraEgress;
+  allEgressPorts = [ cfg.proxy.port ] ++ lib.optional (cfg.proxy.directPort != null) cfg.proxy.directPort
+    ++ egressPorts;
+  # Host-only listing; prepended to an existing line, so empty adds no bytes.
+  egressRow = label: port: note:
+    "  printf '%-16s %5s  %s\\n' ${lib.escapeShellArgs [ label (toString port) note ]}\n";
+  egressDispatch = lib.optionalString (extraEgress != {}) (
+    "if [[ \${1:-} == egress ]]; then\n"
+    + egressRow cfg.proxy.label cfg.proxy.port "default route"
+    + lib.concatStrings (lib.mapAttrsToList (name: egress:
+      egressRow egress.label egress.port (egressVariable name)) extraEgress)
+    + "  exit 0\nfi\n");
   launcherText = import ./agents-container/launcher.nix {
     inherit lib;
     inherit (cfg) workspaceName gatewayName projectDirectoryName shellCommand updateInput commandName;
@@ -32,13 +52,15 @@ let
     webLinks = cfg.webLinks.enable;
     software = if cfg.software == null then {
       packages = []; environment = {}; etcFiles = {}; homeInit = "";
-    } else cfg.software;
+    } else if extraEgress == {} then cfg.software
+    else cfg.software // { environment = cfg.software.environment // egressEnvironment; };
   };
   gateway = import ./container-gateway.nix {
     inherit pkgs lib;
     name = cfg.gatewayImageName;
     port = if cfg.proxy.port == null then 0 else cfg.proxy.port;
     inherit (cfg.proxy) directPort;
+    extraPorts = egressPorts;
   };
   # xdg-open/gio can exit before their browser children. Keep the transient
   # unit alive until its entire cgroup exits, without changing the guest shim.
@@ -66,7 +88,7 @@ let
           ${lib.escapeShellArg cfg.podmanExecutable} ${lib.escapeShellArg cfg.workspaceName} \
           ${pkgs.xdg-utils}/bin/xdg-open "$@"
       fi
-      export AGENTS_SECRET_SOURCES=${lib.escapeShellArg (builtins.toJSON cfg.secretSources)}
+      ${egressDispatch}export AGENTS_SECRET_SOURCES=${lib.escapeShellArg (builtins.toJSON cfg.secretSources)}
       export AGENTS_NIX_ACCESS_TOKENS=${
         lib.escapeShellArg (if cfg.nixAccessTokensFile == null then "" else cfg.nixAccessTokensFile)
       }
@@ -152,6 +174,27 @@ in
       };
       port = lib.mkOption { type = lib.types.nullOr lib.types.port; default = null; };
       directPort = lib.mkOption { type = lib.types.nullOr lib.types.port; default = null; };
+      extraEgress = lib.mkOption {
+        type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
+          options = {
+            port = lib.mkOption { type = lib.types.port; };
+            label = lib.mkOption {
+              type = lib.types.strMatching "[A-Za-z0-9_-]+";
+              default = name;
+              description = "Diagnostic label printed by `<commandName> egress`.";
+            };
+          };
+        }));
+        default = {};
+        description = ''
+          Additional explicit proxy listeners on the host, keyed by lower-case
+          name. Each port is allowed in the gateway firewall and exposed as
+          AGENTS_EGRESS_<NAME>=socks5h://10.0.2.2:<port>. Only clients that use
+          that proxy leave through it; the default route stays on proxy.port.
+          `<commandName> egress` lists the labels and ports. The images carry
+          these ports, so they stay out of runtimeSpec.
+        '';
+      };
       httpProxy = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; };
       listen = lib.mkOption { type = lib.types.str; default = "127.0.0.1"; };
       service = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; };
@@ -161,7 +204,7 @@ in
       default = builtins.hashString "sha256" (builtins.toJSON {
         inherit (cfg) sharedDirectory stateDirectory gpuDevices kvm clipboard
           nixAccessTokensFile secretSources;
-        proxy = builtins.removeAttrs cfg.proxy [ "label" ];
+        proxy = builtins.removeAttrs cfg.proxy [ "label" "extraEgress" ];
         sound.enable = cfg.sound.enable;
         webLinks.enable = cfg.webLinks.enable;
         username = config.home.username;
@@ -320,6 +363,20 @@ in
         # Mounted at the same path in the workspace; a comma would split the mount spec.
         assertion = !cfg.hostNixDaemon.enable || builtins.match "/[^,\n]+" cfg.stateDirectory != null;
         message = "agents-container.hostNixDaemon requires an absolute stateDirectory without commas.";
+      }
+      {
+        assertion = lib.all (name: builtins.match "[a-z][a-z0-9_]{0,31}" name != null)
+          (builtins.attrNames extraEgress);
+        message = "agents-container.proxy.extraEgress keys must be lower-case environment name suffixes.";
+      }
+      {
+        assertion = lib.length (lib.unique allEgressPorts) == lib.length allEgressPorts;
+        message = "agents-container.proxy port, directPort and extraEgress ports must be distinct.";
+      }
+      {
+        assertion = cfg.software == null || !lib.any (name: cfg.software.environment ? ${name})
+          (builtins.attrNames egressEnvironment);
+        message = "agents-container.software.environment must not set AGENTS_EGRESS_* variables of proxy.extraEgress.";
       }
       {
         assertion = cfg.proxy.listen == "127.0.0.1";
