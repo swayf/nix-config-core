@@ -136,6 +136,26 @@ prepare_host_roots() {
     return 1
   fi
   ln -sfn "$roots/profiles/profile" "$link"
+  # The roots mountpoint lies inside the bind-mounted HOME when the state does.
+  # crun would create the missing directories as container root (a subordinate
+  # UID), and the agent could not write its own ~/.local. Create them as this
+  # user and return ownership of directories an earlier start created that way.
+  [[ $AGENTS_STATE == "$AGENTS_HOME"/* ]] || return 0
+  local path=$AGENTS_STATE/home part
+  local -a parts
+  IFS=/ read -ra parts <<< "${AGENTS_STATE#"$AGENTS_HOME"/}/nix-roots"
+  for part in "${parts[@]}"; do
+    path+=/$part
+    if [[ -L $path || ( -e $path && ! -d $path ) ]]; then
+      echo "$path is not a directory; the agent roots mountpoint was not prepared." >&2
+      return 1
+    elif [[ ! -e $path ]]; then
+      mkdir "$path"
+    elif [[ ! -O $path ]]; then
+      # In the Podman user namespace UID 0 is this host user.
+      p unshare chown 0:0 -- "$path"
+    fi
+  done
 }
 #@end
 

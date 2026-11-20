@@ -1096,6 +1096,28 @@ class LauncherHostDaemonTest(unittest.TestCase):
         self.assertFalse(any(c[0] == "create" and c[c.index("--name") + 1] == "agents-dallas"
                              for c in self.state["calls"]))
 
+    def test_roots_mountpoint_inside_home_is_created_by_the_user(self):
+        # State under HOME: crun must not create the mountpoint chain as root.
+        self.env["AGENTS_HOME"] = str(self.base)
+        result = self.run_launcher("up")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        mountpoint = self.state_dir / "home/agents-state/nix-roots"
+        self.assertTrue(mountpoint.is_dir())
+        for directory in (mountpoint.parent, mountpoint):
+            self.assertEqual(directory.stat().st_uid, os.getuid())
+        self.assertFalse(any(c[0] == "unshare" for c in self.state["calls"]))
+
+    def test_roots_mountpoint_non_directory_refuses(self):
+        self.env["AGENTS_HOME"] = str(self.base)
+        blocker = self.state_dir / "home/agents-state"
+        blocker.parent.mkdir(parents=True)
+        blocker.write_text("")
+        result = self.run_launcher("up")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("is not a directory", result.stderr)
+        self.assertFalse(any(c[0] == "create" and c[c.index("--name") + 1] == "agents-dallas"
+                             for c in self.state["calls"]))
+
     def test_check_requires_untrusted_daemon_not_root_owned_store(self):
         self.current_containers()
         curl = self.bin / "curl"
